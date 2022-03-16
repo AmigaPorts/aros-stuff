@@ -38,11 +38,15 @@
 #define NewStackSwap NewPPCStackSwap
 #endif
 
+#define __PTHREAD_SEMAPHORE_TYPE struct SignalSemaphore
+#define __PTHREAD_MINLIST_TYPE struct MinList
+
 #include <setjmp.h>
 #include <string.h>
 #include <stdio.h>
 #include <signal.h>
 #include <stdlib.h>
+#include <sys/time.h>
 
 #include "pthread.h"
 #include "debug.h"
@@ -456,7 +460,9 @@ int pthread_mutex_lock(pthread_mutex_t *mutex) {
 static int _obtain_sema_timed(struct SignalSemaphore *sema, const struct timeval *end, int shared) {
 	struct MsgPort msgport;
 	struct SemaphoreMessage msg;
+#ifndef __AMIGA__
 	struct Message *m1, *m2;
+#endif
 	struct timerequest timerio;
 	struct Task *task;
 
@@ -530,7 +536,10 @@ static int _obtain_sema_timed(struct SignalSemaphore *sema, const struct timeval
 #endif
 
 int pthread_mutex_timedlock(pthread_mutex_t *mutex, const struct timespec *abstime) {
-	struct timeval end, now;
+	struct timeval end;
+#ifndef __AMIGA__
+	struct timeval now;
+#endif
 	int result;
 
 	D(bug("%s(%8lx, %7lx)\n", __FUNCTION__, mutex, abstime));
@@ -1583,7 +1592,7 @@ int pthread_create(pthread_t *thread, const pthread_attr_t *attr, void* (*start)
 	inf->canceltype = PTHREAD_CANCEL_DEFERRED;
 
 	// let's trick CreateNewProc into allocating a larger buffer for the name
-	snprintf(name, sizeof(name), "pthread thread #%ld", threadnew);
+	snprintf(name, sizeof(name), "pthread thread #%ld", (long)threadnew);
 	oldlen = strlen(name);
 	memset(name + oldlen, ' ', sizeof(name) - oldlen - 1);
 	name[sizeof(name) - 1] = '\0';
@@ -2007,6 +2016,12 @@ static
 #endif
 int __pthread_Init_Func(void) {
 	D(bug("%s\n", "********************"));
+
+	if (sizeof(struct SignalSemaphore) > sizeof(struct __OpaqueSemaphore))
+		perror("__OpaqueSemaphore to small");
+
+	if (sizeof(struct MinList) > sizeof(struct __OpaqueMinList))
+		perror("__OpaqueMinList to small");
 
 	DB2(bug("%s()\n", __FUNCTION__));
 

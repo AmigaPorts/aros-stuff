@@ -22,12 +22,23 @@
 #ifndef PTHREAD_H
 #define PTHREAD_H
 
-#include <sys/types.h>
-#include <sys/time.h>
 #include <errno.h>
-#include <exec/types.h>
-#include <exec/semaphores.h>
 #include <sched.h>
+
+struct __OpaqueSemaphore {
+	char buffer[46];
+};
+
+struct __OpaqueMinList {
+	char buffer[12];
+};
+
+#ifndef __PTHREAD_SEMAPHORE_TYPE
+#define __PTHREAD_SEMAPHORE_TYPE struct __OpaqueSemaphore
+#endif
+#ifndef __PTHREAD_MINLIST_TYPE
+#define __PTHREAD_MINLIST_TYPE struct __OpaqueMinList
+#endif
 
 //
 // POSIX options
@@ -44,6 +55,7 @@
 #undef _POSIX_THREAD_PRIORITY_SCHEDULING
 #define _POSIX_THREAD_PRIORITY_SCHEDULING
 
+
 //
 // POSIX limits
 //
@@ -52,6 +64,9 @@
 #define PTHREAD_STACK_MIN                     40960
 #define PTHREAD_THREADS_MAX                   2019
 #define PTHREAD_DESTRUCTOR_ITERATIONS         4
+
+#define _POSIX_THREADS
+#include <sys/_pthreadtypes.h>
 
 //
 // POSIX pthread types
@@ -146,7 +161,7 @@ typedef struct pthread_mutexattr pthread_mutexattr_t;
 struct pthread_mutex
 {
 	int kind;
-	struct SignalSemaphore semaphore;
+	__PTHREAD_SEMAPHORE_TYPE semaphore;
 	int incond;
 };
 
@@ -180,8 +195,8 @@ typedef struct pthread_condattr pthread_condattr_t;
 struct pthread_cond
 {
 	int pad1;
-	struct SignalSemaphore semaphore;
-	struct MinList waiters;
+	__PTHREAD_SEMAPHORE_TYPE semaphore;
+	__PTHREAD_MINLIST_TYPE waiters;
 };
 
 typedef struct pthread_cond pthread_cond_t;
@@ -224,7 +239,7 @@ typedef struct pthread_rwlockattr pthread_rwlockattr_t;
 
 struct pthread_rwlock
 {
-	struct SignalSemaphore semaphore;
+	__PTHREAD_SEMAPHORE_TYPE semaphore;
 };
 
 typedef struct pthread_rwlock pthread_rwlock_t;
