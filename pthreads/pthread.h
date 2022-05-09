@@ -25,12 +25,32 @@
 #include <errno.h>
 #include <sched.h>
 
-struct __OpaqueSemaphore {
-	char buffer[46];
+struct __OpaqueMinNode {
+	struct __OpaqueMinNode * mln_Succ, * mln_Pred;
+};
+
+struct __OpaqueNode {
+	struct __OpaqueNode * ln_Succ, * ln_Pred;
+	char ln_Type, ln_Pri;
+	char * n;
 };
 
 struct __OpaqueMinList {
-	char buffer[12];
+	struct __OpaqueNode * mlh_Head, *mlh_Tail, *mlh_TailPred;
+};
+
+struct __OpaqueSemaphoreRequest {
+	struct __OpaqueMinNode sr_Link;
+	void	*sr_Waiter;
+};
+
+struct __OpaqueSemaphore {
+	struct __OpaqueNode ss_Link;
+	short ss_NestCount;
+	struct __OpaqueMinList ss_WaitQueue;
+	struct __OpaqueSemaphoreRequest	ss_MultipleLink;
+	void	*ss_Owner;
+	short ss_QueueCount;
 };
 
 #ifndef __PTHREAD_SEMAPHORE_TYPE
