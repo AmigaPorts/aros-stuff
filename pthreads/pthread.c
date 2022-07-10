@@ -2085,8 +2085,8 @@ void __pthread_Exit_Func(void) {
 }
 
 #if defined(__MORPHOS__) || defined(__AMIGA__)
-ADD2INIT(__pthread_Init_Func, -4); // above init cpp with -5
-ADD2EXIT(__pthread_Exit_Func, -4);
+ADD2INIT(__pthread_Init_Func, -6); // below init cpp with -5 - it's needed there
+ADD2EXIT(__pthread_Exit_Func, -6);
 #else
 static CONSTRUCTOR_P(__pthread_Init_Func, 100)
 {
