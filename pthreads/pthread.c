@@ -678,6 +678,8 @@ int pthread_cond_destroy(pthread_cond_t *cond) {
 	return 0;
 }
 
+extern void timersub(struct timeval *a, struct timeval *b, struct timeval *res);
+
 static int _pthread_cond_timedwait(pthread_cond_t *cond, pthread_mutex_t *mutex, const struct timespec *abstime, BOOL relative) {
 	CondWaiter waiter;
 	BYTE signal;
