@@ -104,7 +104,13 @@ typedef struct {
 	void* (*start)(void*);
 	void *arg;
 	struct Task *parent;
+	struct Task *joiner;
+	ULONG joinmask;		// the signal the joiner waits for: its own, or SIGF_PARENT if it had none free
 	struct Task *task;
+#ifdef __baserel__
+	void *a4;		// the creator's a4: this program's (or this invocation's, if resident) data
+	pthread_t self;		// the thread's id, which pr_CIS carries in a plain build
+#endif
 	void *ret;
 	pthread_attr_t attr;
 	void *tlsvalues[PTHREAD_KEYS_MAX];
@@ -117,7 +123,10 @@ typedef struct {
 	jmp_buf jmp;
 } ThreadInfo;
 
-static ThreadInfo *_threads;
+/* One ThreadInfo per slot, each allocated once and never moved: a running
+   thread keeps its ThreadInfo pointer for its whole life (StarterFunc), so
+   growing the table must not realloc the ThreadInfos themselves. */
+static ThreadInfo **_threads;
 static unsigned numThreads;
 static struct SignalSemaphore thread_sem;
 static TLSKey *_tlskeys;
@@ -152,7 +161,7 @@ static ThreadInfo* GetThreadInfo(pthread_t thread) {
 
 	// TODO: more robust error handling?
 	if (thread < numThreads)
-		return &_threads[thread];
+		return _threads[thread];
 
 	return 0;
 }
@@ -165,7 +174,7 @@ static pthread_t GetThreadId(struct Task *task) {
 
 // 0 is main task, First thread id will be 1 so that it is different than default value of pthread_t
 	for (i = 0; i < numThreads; i++) {
-		if (_threads[i].task == task)
+		if (_threads[i]->task == task)
 			break;
 	}
 
@@ -177,15 +186,15 @@ static pthread_t GetThreadId(struct Task *task) {
 static int __m68k_sync_val_compare_and_swap(int *v, int o, int n)
 {
 	volatile int * vv = (volatile int *)v;
+	int old;
 
+	// as GCC's builtin: the value that was there, so the swap was made when it equals o
 	Disable();
-	if (*vv == o) {
+	old = *vv;
+	if (old == o)
 		*vv = n;
-		Enable();
-		return n;
-	}
 	Enable();
-	return o;
+	return old;
 }
 #undef __sync_val_compare_and_swap
 #define __sync_val_compare_and_swap(v, o, n) __m68k_sync_val_compare_and_swap(v, o, n)
@@ -1210,7 +1219,7 @@ int pthread_spin_lock(pthread_spinlock_t *lock) {
 #ifdef __MORPHOS__
 	{
 	unsigned int cnt = 0;
-	while (__sync_val_compare_and_swap((int *)lock, 0, 1) == 0)
+	while (__sync_val_compare_and_swap((int *)lock, 0, 1) != 0)
 	{
 		asm volatile("" ::: "memory");
 		if ((cnt++ & 255) == 0)
@@ -1218,7 +1227,7 @@ int pthread_spin_lock(pthread_spinlock_t *lock) {
 	}
 	}
 #else
-	while (__sync_val_compare_and_swap((int*) lock, 0, 1) == 0)
+	while (__sync_val_compare_and_swap((int*) lock, 0, 1) != 0)
 		sched_yield(); // TODO: don't yield the CPU every iteration
 					   // SBF: if yield is implemented correctly there's nothing else to do.
 #endif
@@ -1232,7 +1241,7 @@ int pthread_spin_trylock(pthread_spinlock_t *lock) {
 	if (lock == NULL)
 		return EINVAL;
 
-	if (__sync_val_compare_and_swap((int*) lock, 0, 1) == 0)
+	if (__sync_val_compare_and_swap((int*) lock, 0, 1) != 0)
 		return EBUSY;
 
 	return 0;
@@ -1412,12 +1421,32 @@ AROS_UFH3S(ULONG, CancelHandler,
 }
 #endif
 
+#ifdef __baserel__
+// A base-relative program (-fbaserel, -fbaserel32, -resident, -resident32): the new
+// process starts with no a4 of its own. pr_CIS carries the ThreadInfo (which never
+// moves), and its a4 field holds the creator's a4, saved by pthread_create. That is
+// right for a resident program too, whose data is per invocation (no _geta4 there).
+// Nothing here reads a global until a4 is loaded; pr_CIS then gets the thread's id,
+// as the body expects, and the body runs as a separate function.
+static void StarterBody(void) __attribute__((noinline));
 static void StarterFunc(void) {
+	struct Process *proc = (struct Process *)(*(struct ExecBase **)4)->ThisTask;
+	ThreadInfo *inf = (ThreadInfo *)proc->pr_CIS;
+	__asm__ volatile ("movea.l %0,%%a4" : : "a" (inf->a4) : "memory");
+	proc->pr_CIS = (BPTR)inf->self;
+	StarterBody();
+}
+static void StarterBody(void) {
+#else
+static void StarterFunc(void) {
+#endif
 	ThreadInfo *inf;
 	void *ret;
 	pthread_t pid;
 	int i, j;
 	int foundkey = TRUE;
+	struct Task *joiner;
+	ULONG joinmask;
 #ifdef USE_ASYNC_CANCEL
 	APTR oldexcept;
 #endif
@@ -1527,10 +1556,23 @@ static void StarterFunc(void) {
 	DB2(bug("%s(releasing inf ptr %8lx)\n", __FUNCTION__, inf));
 	// tell the parent thread that we are done
 	Forbid();
-	inf->task = (struct Task *)-1;
 	inf->finished = 1;
+	if (inf->attr.detachstate == PTHREAD_CREATE_DETACHED) {
+		// nobody will join it: the slot is free again (pthread_create takes a slot whose task is NULL),
+		// and its parent, which may have ended, is not signalled
+		inf->task = NULL;
+		ReleaseSemaphore(&thread_sem);
+		return;
+	}
+	inf->task = (struct Task *)-1;
+	// only a joiner is told, on the signal it waits for (normally one of its own): the
+	// parent's Ctrl-F is the program's. Read under thread_sem; Forbid() holds until this
+	// process has gone, so the joiner can't run (or free its signal) before it is sent.
+	joiner = inf->joiner;
+	joinmask = inf->joinmask;
 	ReleaseSemaphore(&thread_sem);
-	Signal(inf->parent, SIGF_PARENT);
+	if (joiner)
+		Signal(joiner, joinmask);
 }
 
 int pthread_create(pthread_t *thread, const pthread_attr_t *attr, void* (*start)(void*), void *arg) {
@@ -1563,15 +1605,16 @@ int pthread_create(pthread_t *thread, const pthread_attr_t *attr, void* (*start)
 			n = PTHREAD_THREADS_MAX;
 
 		if (n != numThreads) {
-			ThreadInfo *t = (ThreadInfo*) realloc(_threads, n * sizeof(ThreadInfo));
-			if (!t) {
-				ReleaseSemaphore(&thread_sem);
-				return EAGAIN;
+			unsigned i;
+			for (i = numThreads; i < n; i++) {
+				ThreadInfo *t = (ThreadInfo*) calloc(1, sizeof(ThreadInfo));
+				if (!t) {
+					numThreads = i;
+					ReleaseSemaphore(&thread_sem);
+					return EAGAIN;
+				}
+				_threads[i] = t;
 			}
-
-			memset(&t[numThreads], 0, (n - numThreads) * sizeof(ThreadInfo));
-
-			_threads = t;
 			numThreads = n;
 		}
 	}
@@ -1601,6 +1644,14 @@ int pthread_create(pthread_t *thread, const pthread_attr_t *attr, void* (*start)
 	memset(name + oldlen, ' ', sizeof(name) - oldlen - 1);
 	name[sizeof(name) - 1] = '\0';
 
+#ifdef __baserel__
+	{
+		register void *a4 __asm__("a4");
+		__asm__ ("" : "=r" (a4));	// a4 as it is now, in the creating thread
+		inf->a4 = a4;
+		inf->self = threadnew;
+	}
+#endif
 	// start the child thread
 	inf->task = (struct Task*) CreateNewProcTags(NP_Entry, (IPTR) StarterFunc,
 #ifdef __MORPHOS__
@@ -1610,20 +1661,25 @@ int pthread_create(pthread_t *thread, const pthread_attr_t *attr, void* (*start)
 #else
 			(inf->attr.stackaddr == NULL && inf->attr.stacksize > 0) ? NP_StackSize : TAG_IGNORE, inf->attr.stacksize,
 #endif
-#ifdef __AMIGA__
+#if defined(__AMIGA__) && defined(__baserel__)
+			NP_Input, (IPTR) inf,
+#elif defined(__AMIGA__)
 			NP_Input, (IPTR) threadnew,
 #else
 		NP_UserData, threadnew,
 #endif
 			NP_Name, (IPTR) name, TAG_DONE);
 
-	ReleaseSemaphore(&thread_sem);
+	{
+		struct Task *started = inf->task;
+		if (!started)
+			inf->parent = NULL;
+		ReleaseSemaphore(&thread_sem);
 
-	D(bug("new thread=%ld, task=%8lx, fini=%ld, detach=%ld\n", threadnew, inf->task, (int)inf->finished, (int)inf->attr.detachstate));
+		D(bug("new thread=%ld, task=%8lx\n", threadnew, started));
 
-	if (!inf->task) {
-		inf->parent = NULL;
-		return EAGAIN;
+		if (!started)
+			return EAGAIN;
 	}
 
 	*thread = threadnew;
@@ -1632,14 +1688,32 @@ int pthread_create(pthread_t *thread, const pthread_attr_t *attr, void* (*start)
 }
 
 int pthread_detach(pthread_t thread) {
-	D(bug("%s(%ld) not implemented\n", __FUNCTION__, thread));
+	ThreadInfo *inf;
 
-	return ESRCH;
+	D(bug("%s(%ld)\n", __FUNCTION__, thread));
+
+	ObtainSemaphore(&thread_sem);
+	inf = GetThreadInfo(thread);
+	if (inf == NULL || !inf->task) {
+		ReleaseSemaphore(&thread_sem);
+		return ESRCH;
+	}
+	if (inf->attr.detachstate == PTHREAD_CREATE_DETACHED) {
+		ReleaseSemaphore(&thread_sem);
+		return EINVAL;
+	}
+	inf->attr.detachstate = PTHREAD_CREATE_DETACHED;
+	if (inf->finished)
+		inf->task = NULL;	// it has ended already: its slot is free now
+	ReleaseSemaphore(&thread_sem);
+	return 0;
 }
 
 int pthread_join(pthread_t thread, void **value_ptr) {
 	ThreadInfo *inf;
 	struct Task * task = SysBase->ThisTask;
+	BYTE signal;
+	ULONG got, putback = 0;
 
 	pthread_testcancel();
 
@@ -1650,29 +1724,47 @@ int pthread_join(pthread_t thread, void **value_ptr) {
 	ObtainSemaphore(&thread_sem);
 	inf = GetThreadInfo(thread);
 	D(bug("%s(%ld, inf=%8lx, fini=%ld, detach=%ld, started=%ld)\n", __FUNCTION__, thread, inf, (int)(inf ? inf->finished : 0), (int)(inf ? inf->attr.detachstate : 0), inf->started));
-	if (inf == NULL || !inf->task)
+	if (inf == NULL || !inf->task) {
+		ReleaseSemaphore(&thread_sem);
 		return ESRCH;
+	}
 
-	if (inf->attr.detachstate)
+	if (inf->attr.detachstate) {
+		ReleaseSemaphore(&thread_sem);
 		return EINVAL;
+	}
 
-	// busy yield loop...
+	// wait for the thread's end on a signal of the joiner's own: the thread sends it once
+	// finished is set, and nothing else does, so the program's Ctrl-F is never touched.
+	// joiner and joinmask are set, and finished read, under thread_sem; the thread sets
+	// finished and reads them under it too, so a thread that ends after the check below
+	// always sends the signal, and it is pending at Wait.
+	signal = AllocSignal(-1);
+	if (signal == -1) {
+		// none free: Ctrl-F (SIGF_PARENT), as before. A Ctrl-F is then the thread's only
+		// if the thread has really ended; any other (one already pending now, or one that
+		// wakes the Wait early) is the program's, and is put back afterwards.
+		signal = SIGB_PARENT;
+		putback = SetSignal(0, SIGF_PARENT) & SIGF_PARENT;
+	} else
+		SetSignal(0, 1UL << signal);
+	inf->joiner = task;
+	inf->joinmask = 1UL << signal;
 	while (!inf->started || !inf->finished) {
 		ReleaseSemaphore(&thread_sem);
-		D(bug("waiting for %ld to start...\n", thread));
-		--task->tc_Node.ln_Pri;
-		sched_yield();
-		++task->tc_Node.ln_Pri;
-
-#if 0
-		// TODO add proper signal waiting - but some that works from any task
 		D(bug("%s waiting for signal (%ld, inf=%8lx, fini=%ld)\n", __FUNCTION__, thread, inf, (int)inf->finished));
-		Wait(SIGF_PARENT);
-#endif
-
+		got = Wait(1UL << signal);
 		ObtainSemaphore(&thread_sem);
 		inf = GetThreadInfo(thread);
+		if (signal == SIGB_PARENT && (!inf->started || !inf->finished))
+			putback |= got & SIGF_PARENT;	// woken, but the thread runs on: not its Ctrl-F
 	}
+	// the thread has ended. If it signalled while this task wasn't in Wait (it was taking
+	// thread_sem), its signal is still pending: clear it, so neither a later AllocSignal
+	// of the same bit nor (on Ctrl-F) the program sees it.
+	SetSignal(0, 1UL << signal);
+	inf->joiner = NULL;
+	inf->joinmask = 0;
 
 	D(bug("%s finished after wait (%ld, %ld)\n", __FUNCTION__, thread, (int)inf->finished));
 	if (value_ptr)
@@ -1680,6 +1772,10 @@ int pthread_join(pthread_t thread, void **value_ptr) {
 
 	inf->task = NULL;
 	ReleaseSemaphore(&thread_sem);
+	if (signal != SIGB_PARENT)
+		FreeSignal(signal);
+	else if (putback)
+		SetSignal(putback, putback);	// the program's own Ctrl-F, back where it was
 	return 0;
 }
 
@@ -2039,13 +2135,16 @@ int __pthread_Init_Func(void) {
 	InitSemaphore(&tls_sem);
 
 	// reserve ID 0 for the main thread
-	_threads = (ThreadInfo*) malloc(sizeof(ThreadInfo) * INITIALSIZE);
+	_threads = (ThreadInfo**) calloc(PTHREAD_THREADS_MAX, sizeof(ThreadInfo*));
 	if (!_threads)
 		exit(10);
-	memset(_threads, 0, sizeof(ThreadInfo) * INITIALSIZE);
-	numThreads = INITIALSIZE;
+	for (numThreads = 0; numThreads < INITIALSIZE; numThreads++) {
+		_threads[numThreads] = (ThreadInfo*) calloc(1, sizeof(ThreadInfo));
+		if (!_threads[numThreads])
+			exit(10);
+	}
 
-	ThreadInfo *inf = &_threads[0];
+	ThreadInfo *inf = _threads[0];
 #ifdef __AMIGA__
 	inf->task = SysBase->ThisTask;
 #else
