@@ -84,7 +84,6 @@ install_libm020bb32:
 install_one:
 	mkdir -p $(PREFIX)/m68k-amigaos/lib/$(to)
 	cp $(kind)/*.a $(PREFIX)/m68k-amigaos/lib/$(to)
-	cp $(kind)/*.o $(PREFIX)/m68k-amigaos/lib/$(to)
 	
 
 # startup stuff
