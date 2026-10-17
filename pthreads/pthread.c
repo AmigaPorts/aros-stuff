@@ -105,7 +105,7 @@ typedef struct {
 	void *arg;
 	struct Task *parent;
 	struct Task *joiner;
-	ULONG joinmask;		// the signal the joiner waits for: its own, or SIGF_PARENT if it had none free
+	ULONG joinmask;		// the signal the joiner waits for, if one was available
 	struct Task *task;
 #ifdef __baserel__
 	void *a4;		// the creator's a4: this program's (or this invocation's, if resident) data
@@ -1698,7 +1698,7 @@ int pthread_detach(pthread_t thread) {
 		ReleaseSemaphore(&thread_sem);
 		return ESRCH;
 	}
-	if (inf->attr.detachstate == PTHREAD_CREATE_DETACHED) {
+	if (inf->attr.detachstate == PTHREAD_CREATE_DETACHED || inf->joiner) {
 		ReleaseSemaphore(&thread_sem);
 		return EINVAL;
 	}
@@ -1713,7 +1713,6 @@ int pthread_join(pthread_t thread, void **value_ptr) {
 	ThreadInfo *inf;
 	struct Task * task = SysBase->ThisTask;
 	BYTE signal;
-	ULONG got, putback = 0;
 
 	pthread_testcancel();
 
@@ -1733,36 +1732,32 @@ int pthread_join(pthread_t thread, void **value_ptr) {
 		ReleaseSemaphore(&thread_sem);
 		return EINVAL;
 	}
+	if (inf->joiner) {
+		ReleaseSemaphore(&thread_sem);
+		return EINVAL;
+	}
 
-	// wait for the thread's end on a signal of the joiner's own: the thread sends it once
-	// finished is set, and nothing else does, so the program's Ctrl-F is never touched.
-	// joiner and joinmask are set, and finished read, under thread_sem; the thread sets
-	// finished and reads them under it too, so a thread that ends after the check below
-	// always sends the signal, and it is pending at Wait.
-	signal = AllocSignal(-1);
-	if (signal == -1) {
-		// none free: Ctrl-F (SIGF_PARENT), as before. A Ctrl-F is then the thread's only
-		// if the thread has really ended; any other (one already pending now, or one that
-		// wakes the Wait early) is the program's, and is put back afterwards.
-		signal = SIGB_PARENT;
-		putback = SetSignal(0, SIGF_PARENT) & SIGF_PARENT;
-	} else
+	// Use a private signal when possible. If none is free, poll completion without
+	// touching the application's Ctrl-F. The child and joiner synchronize through
+	// thread_sem, so completion cannot be missed between the test and the wait.
+	signal = inf->finished ? -1 : AllocSignal(-1);
+	if (signal != -1)
 		SetSignal(0, 1UL << signal);
 	inf->joiner = task;
-	inf->joinmask = 1UL << signal;
+	inf->joinmask = signal == -1 ? 0 : 1UL << signal;
 	while (!inf->started || !inf->finished) {
 		ReleaseSemaphore(&thread_sem);
-		D(bug("%s waiting for signal (%ld, inf=%8lx, fini=%ld)\n", __FUNCTION__, thread, inf, (int)inf->finished));
-		got = Wait(1UL << signal);
+		if (signal == -1)
+			Delay(1);
+		else
+			Wait(1UL << signal);
 		ObtainSemaphore(&thread_sem);
 		inf = GetThreadInfo(thread);
-		if (signal == SIGB_PARENT && (!inf->started || !inf->finished))
-			putback |= got & SIGF_PARENT;	// woken, but the thread runs on: not its Ctrl-F
 	}
 	// the thread has ended. If it signalled while this task wasn't in Wait (it was taking
-	// thread_sem), its signal is still pending: clear it, so neither a later AllocSignal
-	// of the same bit nor (on Ctrl-F) the program sees it.
-	SetSignal(0, 1UL << signal);
+	// thread_sem), its private signal is still pending: clear it before reuse.
+	if (signal != -1)
+		SetSignal(0, 1UL << signal);
 	inf->joiner = NULL;
 	inf->joinmask = 0;
 
@@ -1772,10 +1767,8 @@ int pthread_join(pthread_t thread, void **value_ptr) {
 
 	inf->task = NULL;
 	ReleaseSemaphore(&thread_sem);
-	if (signal != SIGB_PARENT)
+	if (signal != -1)
 		FreeSignal(signal);
-	else if (putback)
-		SetSignal(putback, putback);	// the program's own Ctrl-F, back where it was
 	return 0;
 }
 
@@ -2173,12 +2166,27 @@ void __pthread_Exit_Func(void) {
 
 	// if we don't do this we can easily end up with unloaded code being executed
 	for (i = 1; i < numThreads; i++) {
-		// a thread might still be in creation!
-		ObtainSemaphore(&thread_sem);
-		ThreadInfo *inf = GetThreadInfo(i);
-		inf->attr.detachstate = PTHREAD_CREATE_JOINABLE; // force it to be joinable or waiting may fail.
-		ReleaseSemaphore(&thread_sem);
-		pthread_join(i, NULL);
+		for (;;) {
+			ThreadInfo *inf;
+			ObtainSemaphore(&thread_sem);
+			inf = GetThreadInfo(i);
+			if (!inf->task) {
+				ReleaseSemaphore(&thread_sem);
+				break;
+			}
+			if (inf->joiner) {
+				// The registered joiner must reclaim the slot itself.
+				ReleaseSemaphore(&thread_sem);
+				Delay(1);
+				continue;
+			}
+			inf->attr.detachstate = PTHREAD_CREATE_JOINABLE;
+			ReleaseSemaphore(&thread_sem);
+			if (pthread_join(i, NULL) == 0)
+				break;
+			// Another task may have registered as joiner meanwhile.
+			Delay(1);
+		}
 	}
 
 #endif

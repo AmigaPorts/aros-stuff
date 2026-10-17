@@ -6,6 +6,7 @@ SOURCES =
 PREFIX ?= /opt/amiga
 
 CC = m68k-amigaos-gcc
+CXX = m68k-amigaos-g++
 AR = m68k-amigaos-ar
 AS = m68k-amigaos-as
 
@@ -40,6 +41,42 @@ endif
 
 .PHONY: lib libb libm020 libm020bb libm020bb32
 all: info lib libb libm020 libm020bb libm020bb32
+
+.PHONY: check check_lib check_libb check_libm020 check_libm020bb check_libm020bb32 check_one
+check: check_lib check_libb check_libm020 check_libm020bb check_libm020bb32
+
+check_lib:
+	$(MAKE) check_one kind=lib flags=""
+
+check_libb:
+	$(MAKE) check_one kind=libb flags="-fbaserel"
+
+check_libm020:
+	$(MAKE) check_one kind=libm020 flags="-m68020"
+
+check_libm020bb:
+	$(MAKE) check_one kind=libm020bb flags="-fbaserel -m68020"
+
+check_libm020bb32:
+	$(MAKE) check_one kind=libm020bb32 flags="-fbaserel32 -m68020"
+
+check_one:
+	@mkdir -p $(kind)
+	$(MAKE) one kind=$(kind) flags="$(flags)" CFLAGS="$(CFLAGS)"
+	@mkdir -p $(kind)/tests
+	$(CC) $(flags) -mcrt=nix20 -O2 -Wall -I$(root) \
+		$(root)/tests/joinsig.c -L$(kind) -lpthread -o $(kind)/tests/joinsig
+	@if printf '#include <thread>\n#ifndef _GLIBCXX_HAS_GTHREADS\n#error no thread support\n#endif\n' | \
+		$(CXX) $(flags) -x c++ -fsyntax-only - >/dev/null 2>&1; then \
+		$(MAKE) -f $(root)/Makefile.gcc6 check_cxx_one kind=$(kind) flags="$(flags)"; \
+	else echo "SKIP $(kind) C++ tests: libstdc++ has no thread support"; fi
+
+.PHONY: check_cxx_one
+check_cxx_one:
+	$(CXX) $(flags) -mcrt=nix20 -m68881 -O2 -std=gnu++23 -I$(root) \
+		$(root)/tests/t3race.cpp -L$(kind) -lpthread -latomic -o $(kind)/tests/t3race
+	$(CXX) $(flags) -mcrt=nix20 -m68881 -O2 -std=gnu++23 -I$(root) \
+		$(root)/tests/t3w_warm.cpp -L$(kind) -lpthread -latomic -o $(kind)/tests/t3w_warm
 
 # the desired kinds to be build
 lib:
@@ -120,7 +157,7 @@ pthread:
 	$(MAKE) -C $(kind) libpthread.a lib=pthread
 
 # build the lib base on $(lib), $(kind) and $(flags)
-lib$(libname).a: $(shell find $(root)/$(SOURCES)/* -name '*.c') $(stolen) $(shell find $(root)/$(HEADERS)/* -name '*.h') $(root)/Makefile.gcc6
+lib$(libname).a: $(root)/pthread.c $(root)/sched.c $(root)/semaphore.c $(stolen) $(shell find $(root)/$(HEADERS)/* -name '*.h') $(root)/Makefile.gcc6
 	@mkdir -p $(lib)
 	@echo compiling for $(kind)/$@ using $(CC) -c $(CFLAGS) $(flags)
 	@touch -t 0001010000 $(lib)/stamp && if [ -e $@ ]; then touch -r $@ $(lib)/stamp; fi
