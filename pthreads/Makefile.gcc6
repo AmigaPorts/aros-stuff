@@ -37,28 +37,36 @@ CFLAGS ?= -Os -fomit-frame-pointer
 CFLAGS += -noixemul -I$(root)
 endif
 
-.PHONY: all one clean install install_one
+# The multilibs are the compiler's: -print-multi-lib lists one library
+# directory per line with the options that select it after a ';', each
+# prefixed with '@' (libb/libm020;@fbaserel@m68020-60).  The base directory
+# '.' is built in lib/, every other one in a directory of its own name.
+# libpthread has no floating point, so the FPU directories (m68881) are
+# skipped: the linker falls back to their parent.
+MULTILIBS := $(filter-out %m68881,$(shell $(CC) -print-multi-lib))
+multilib_dir = $(word 1,$(subst ;, ,$1))
+multilib_flags = $(strip $(subst @, -,$(word 2,$(subst ;, ,$1))))
+multilib_kind = $(if $(filter .,$(call multilib_dir,$1)),lib,$(call multilib_dir,$1))
+KINDS = $(foreach m,$(MULTILIBS),$(call multilib_kind,$m))
 
-.PHONY: lib libb libm020 libm020bb libm020bb32
-all: info lib libb libm020 libm020bb libm020bb32
+.PHONY: all one clean install install_one check check_one
+all: info $(KINDS)
+check: $(foreach k,$(KINDS),check_$(subst /,_,$k))
+install: $(foreach k,$(KINDS),install_$(subst /,_,$k))
 
-.PHONY: check check_lib check_libb check_libm020 check_libm020bb check_libm020bb32 check_one
-check: check_lib check_libb check_libm020 check_libm020bb check_libm020bb32
-
-check_lib:
-	$(MAKE) check_one kind=lib flags=""
-
-check_libb:
-	$(MAKE) check_one kind=libb flags="-fbaserel"
-
-check_libm020:
-	$(MAKE) check_one kind=libm020 flags="-m68020"
-
-check_libm020bb:
-	$(MAKE) check_one kind=libm020bb flags="-fbaserel -m68020"
-
-check_libm020bb32:
-	$(MAKE) check_one kind=libm020bb32 flags="-fbaserel32 -m68020"
+# per multilib: build in its directory, build the tests against it, install
+# into the same directory under $(PREFIX)/m68k-amigaos/lib
+define multilib_rules
+.PHONY: $(2) check_$(subst /,_,$(2)) install_$(subst /,_,$(2))
+$(2):
+	@mkdir -p $$@
+	$$(MAKE) one kind=$$@ flags="$(3)"
+check_$(subst /,_,$(2)):
+	$$(MAKE) check_one kind=$(2) flags="$(3)"
+install_$(subst /,_,$(2)):
+	$$(MAKE) install_one kind=$(2) to="$(if $(filter .,$(1)),,$(1)/)"
+endef
+$(foreach m,$(MULTILIBS),$(eval $(call multilib_rules,$(call multilib_dir,$m),$(call multilib_kind,$m),$(call multilib_flags,$m))))
 
 check_one:
 	@mkdir -p $(kind)
@@ -78,44 +86,8 @@ check_cxx_one:
 	$(CXX) $(flags) -mcrt=nix20 -m68881 -O2 -std=gnu++23 -I$(root) \
 		$(root)/tests/t3w_warm.cpp -L$(kind) -lpthread -latomic -o $(kind)/tests/t3w_warm
 
-# the desired kinds to be build
-lib:
-	@mkdir -p $@
-	$(MAKE) one kind=$@
-		
-libb:
-	@mkdir -p $@
-	$(MAKE) one kind=$@ flags="-fbaserel  -save-temps"
-
-libm020:
-	@mkdir -p $@
-	$(MAKE) one kind=$@ flags="-m68020"
-
-libm020bb:
-	@mkdir -p $@
-	$(MAKE) one kind=$@ flags="-fbaserel -m68020"
-
-libm020bb32:
-	@mkdir -p $@
-	$(MAKE) one kind=$@ flags="-fbaserel32 -m68020"
-
 # the libs to build for each kind
 one: pthread
-
-# install all kinds into the prefix
-.PHONY: install_lib install_libb install_libm020 install_libm020bb install_libm020bb32
-install: install_lib install_libb install_libm020 install_libm020bb install_libm020bb32
-	
-install_lib:
-	$(MAKE) install_one kind=lib to=""
-install_libb:
-	$(MAKE) install_one kind=libb to="libb/"
-install_libm020:
-	$(MAKE) install_one kind=libm020 to="libm020/"
-install_libm020bb:
-	$(MAKE) install_one kind=libm020bb to="libb/libm020/"
-install_libm020bb32:
-	$(MAKE) install_one kind=libm020bb32 to="libb32/libm020/"
 
 # install the files for the given $(kind) into $(to)
 install_one:
