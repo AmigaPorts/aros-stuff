@@ -14,7 +14,8 @@ uname := $(shell uname)
 root ?= $(shell echo $$PWD)
 export root
 
-MAKEFILES=$(root)/Makefile.gcc6
+# the recursive makes read only this file, not the generic Makefile next to it
+SUBMAKE = $(MAKE) -f $(root)/Makefile.gcc6
 
 # special path handling for msys2 started from Eclipse
 ifneq (,$(findstring MSYS_NT,$(uname)))
@@ -60,23 +61,23 @@ define multilib_rules
 .PHONY: $(2) check_$(subst /,_,$(2)) install_$(subst /,_,$(2))
 $(2):
 	@mkdir -p $$@
-	$$(MAKE) one kind=$$@ flags="$(3)"
+	$$(SUBMAKE) one kind=$$@ flags="$(3)" CFLAGS="$$(CFLAGS)"
 check_$(subst /,_,$(2)):
-	$$(MAKE) check_one kind=$(2) flags="$(3)"
+	$$(SUBMAKE) check_one kind=$(2) flags="$(3)"
 install_$(subst /,_,$(2)):
-	$$(MAKE) install_one kind=$(2) to="$(if $(filter .,$(1)),,$(1)/)"
+	$$(SUBMAKE) install_one kind=$(2) to="$(if $(filter .,$(1)),,$(1)/)"
 endef
 $(foreach m,$(MULTILIBS),$(eval $(call multilib_rules,$(call multilib_dir,$m),$(call multilib_kind,$m),$(call multilib_flags,$m))))
 
 check_one:
 	@mkdir -p $(kind)
-	$(MAKE) one kind=$(kind) flags="$(flags)" CFLAGS="$(CFLAGS)"
+	$(SUBMAKE) one kind=$(kind) flags="$(flags)" CFLAGS="$(CFLAGS)"
 	@mkdir -p $(kind)/tests
 	$(CC) $(flags) -mcrt=nix20 -O2 -Wall -I$(root) \
 		$(root)/tests/joinsig.c -L$(kind) -lpthread -o $(kind)/tests/joinsig
 	@if printf '#include <thread>\n#ifndef _GLIBCXX_HAS_GTHREADS\n#error no thread support\n#endif\n' | \
 		$(CXX) $(flags) -x c++ -fsyntax-only - >/dev/null 2>&1; then \
-		$(MAKE) -f $(root)/Makefile.gcc6 check_cxx_one kind=$(kind) flags="$(flags)"; \
+		$(SUBMAKE) check_cxx_one kind=$(kind) flags="$(flags)"; \
 	else echo "SKIP $(kind) C++ tests: libstdc++ has no thread support"; fi
 
 .PHONY: check_cxx_one
@@ -126,7 +127,7 @@ lib/nlrcrt0.o: $(root)/$(SOURCES)/startup/nlrcrt0.S libdir
 
 .PHONY: pthread
 pthread:
-	$(MAKE) -C $(kind) libpthread.a lib=pthread
+	$(SUBMAKE) -C $(kind) libpthread.a lib=pthread
 
 # build the lib base on $(lib), $(kind) and $(flags)
 lib$(libname).a: $(root)/pthread.c $(root)/sched.c $(root)/semaphore.c $(stolen) $(shell find $(root)/$(HEADERS)/* -name '*.h') $(root)/Makefile.gcc6
