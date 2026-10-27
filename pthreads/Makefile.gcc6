@@ -15,7 +15,17 @@ root ?= $(shell echo $$PWD)
 export root
 
 # the recursive makes read only this file, not the generic Makefile next to it
-SUBMAKE = $(MAKE) -f $(root)/Makefile.gcc6
+SUBMAKE = $(MAKE) --no-print-directory $(if $(Q),-s) -f $(root)/Makefile.gcc6
+
+# one line per file built; V=1 shows the commands instead
+ifeq ($(V),1)
+Q =
+quiet = @:
+else
+Q = @
+quiet = @echo
+endif
+export V
 
 # special path handling for msys2 started from Eclipse
 ifneq (,$(findstring MSYS_NT,$(uname)))
@@ -51,7 +61,7 @@ multilib_kind = $(if $(filter .,$(call multilib_dir,$1)),lib,$(call multilib_dir
 KINDS = $(foreach m,$(MULTILIBS),$(call multilib_kind,$m))
 
 .PHONY: all one clean install install_one check check_one
-all: info $(KINDS)
+all: $(KINDS)
 check: $(foreach k,$(KINDS),check_$(subst /,_,$k))
 install: $(foreach k,$(KINDS),install_$(subst /,_,$k))
 
@@ -61,19 +71,20 @@ define multilib_rules
 .PHONY: $(2) check_$(subst /,_,$(2)) install_$(subst /,_,$(2))
 $(2):
 	@mkdir -p $$@
-	$$(SUBMAKE) one kind=$$@ flags="$(3)" CFLAGS="$$(CFLAGS)"
+	$$(Q)$$(SUBMAKE) one kind=$$@ flags="$(3)" CFLAGS="$$(CFLAGS)"
 check_$(subst /,_,$(2)):
-	$$(SUBMAKE) check_one kind=$(2) flags="$(3)"
+	$$(Q)$$(SUBMAKE) check_one kind=$(2) flags="$(3)"
 install_$(subst /,_,$(2)):
-	$$(SUBMAKE) install_one kind=$(2) to="$(if $(filter .,$(1)),,$(1)/)"
+	$$(Q)$$(SUBMAKE) install_one kind=$(2) to="$(if $(filter .,$(1)),,$(1)/)"
 endef
 $(foreach m,$(MULTILIBS),$(eval $(call multilib_rules,$(call multilib_dir,$m),$(call multilib_kind,$m),$(call multilib_flags,$m))))
 
 check_one:
 	@mkdir -p $(kind)
-	$(SUBMAKE) one kind=$(kind) flags="$(flags)" CFLAGS="$(CFLAGS)"
+	$(Q)$(SUBMAKE) one kind=$(kind) flags="$(flags)" CFLAGS="$(CFLAGS)"
 	@mkdir -p $(kind)/tests
-	$(CC) $(flags) -mcrt=nix20 -O2 -Wall -I$(root) \
+	$(quiet) "  LD      $(kind)/tests/joinsig"
+	$(Q)$(CC) $(flags) -mcrt=nix20 -O2 -Wall -I$(root) \
 		$(root)/tests/joinsig.c -L$(kind) -lpthread -o $(kind)/tests/joinsig
 	@if printf '#include <thread>\n#ifndef _GLIBCXX_HAS_GTHREADS\n#error no thread support\n#endif\n' | \
 		$(CXX) $(flags) -x c++ -fsyntax-only - >/dev/null 2>&1; then \
@@ -82,9 +93,11 @@ check_one:
 
 .PHONY: check_cxx_one
 check_cxx_one:
-	$(CXX) $(flags) -mcrt=nix20 -m68881 -O2 -std=gnu++23 -I$(root) \
+	$(quiet) "  LD      $(kind)/tests/t3race"
+	$(Q)$(CXX) $(flags) -mcrt=nix20 -m68881 -O2 -std=gnu++23 -I$(root) \
 		$(root)/tests/t3race.cpp -L$(kind) -lpthread -latomic -o $(kind)/tests/t3race
-	$(CXX) $(flags) -mcrt=nix20 -m68881 -O2 -std=gnu++23 -I$(root) \
+	$(quiet) "  LD      $(kind)/tests/t3w_warm"
+	$(Q)$(CXX) $(flags) -mcrt=nix20 -m68881 -O2 -std=gnu++23 -I$(root) \
 		$(root)/tests/t3w_warm.cpp -L$(kind) -lpthread -latomic -o $(kind)/tests/t3w_warm
 
 # the libs to build for each kind
@@ -92,8 +105,9 @@ one: pthread
 
 # install the files for the given $(kind) into $(to)
 install_one:
-	mkdir -p $(PREFIX)/m68k-amigaos/lib/$(to)
-	cp $(kind)/*.a $(PREFIX)/m68k-amigaos/lib/$(to)
+	$(quiet) "  INSTALL $(kind)/libpthread.a"
+	$(Q)mkdir -p $(PREFIX)/m68k-amigaos/lib/$(to)
+	$(Q)cp $(kind)/*.a $(PREFIX)/m68k-amigaos/lib/$(to)
 	
 
 # startup stuff
@@ -127,18 +141,20 @@ lib/nlrcrt0.o: $(root)/$(SOURCES)/startup/nlrcrt0.S libdir
 
 .PHONY: pthread
 pthread:
-	$(SUBMAKE) -C $(kind) libpthread.a lib=pthread
+	$(Q)$(SUBMAKE) -C $(kind) libpthread.a lib=pthread
 
-# build the lib base on $(lib), $(kind) and $(flags)
-lib$(libname).a: $(wildcard $(root)/pthread_*.c) $(root)/sched.c $(root)/semaphore.c $(stolen) $(shell find $(root)/$(HEADERS)/* -name '*.h') $(root)/Makefile.gcc6
-	@mkdir -p $(lib)
-	@echo compiling for $(kind)/$@ using $(CC) -c $(CFLAGS) $(flags)
-	@touch -t 0001010000 $(lib)/stamp && if [ -e $@ ]; then touch -r $@ $(lib)/stamp; fi
-	@if [ "$$(find $(root)/$(HEADERS)/* -newer $(lib)/stamp)" != "" ]; then rm -f $(lib)/*.o $@; touch -t 0001010000 $(lib)/stamp; fi
-	@if [ "$$(find $(root)/Makefile.gcc6 -newer $(lib)/stamp)" != "" ]; then rm -f $(lib)/*.o $@; touch -t 0001010000 $(lib)/stamp; fi
-	@cd $(lib) && files="$$(find $^ -name '*.c' -newer stamp)" && echo "$(CC) -c $(CFLAGS) $(flags) $$files" && $(CC) -c $(CFLAGS) $(flags) $$files 
-	@#echo archive $(kind)/$@
-	@$(AR) rcs $@ $$(find ./$(lib)/* -name '*.o' -newer $(lib)/stamp)
+# build the lib in $(kind) with $(flags): one object per source, so that a
+# program links only the ones it calls
+SRCS = $(wildcard $(root)/pthread_*.c) $(root)/sched.c $(root)/semaphore.c
+OBJS = $(notdir $(SRCS:.c=.o))
+
+%.o: $(root)/%.c $(wildcard $(root)/*.h) $(root)/Makefile.gcc6
+	$(quiet) "  CC      $(kind)/$@"
+	$(Q)$(CC) -c $(CFLAGS) $(flags) $< -o $@
+
+lib$(libname).a: $(OBJS)
+	$(quiet) "  AR      $(kind)/$@"
+	$(Q)rm -f $@ && $(AR) rcs $@ $^
 
 
 # cleanup
