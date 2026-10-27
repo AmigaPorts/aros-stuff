@@ -278,8 +278,20 @@ int pthread_create(pthread_t *thread, const pthread_attr_t *attr, void* (*start)
 	inf->cancelstate = PTHREAD_CANCEL_ENABLE;
 	inf->canceltype = PTHREAD_CANCEL_DEFERRED;
 
-	// let's trick CreateNewProc into allocating a larger buffer for the name
-	snprintf(name, sizeof(name), "pthread thread #%ld", (long)threadnew);
+	// let's trick CreateNewProc into allocating a larger buffer for the name.
+	// The number is formatted by hand: snprintf would link the C library's stdio.
+	{
+		static const char prefix[] = "pthread thread #";
+		char digits[12], *d = digits + sizeof(digits);
+		unsigned long n = threadnew;
+
+		*--d = '\0';
+		do
+			*--d = '0' + n % 10;
+		while (n /= 10);
+		strcpy(name, prefix);
+		strcpy(name + sizeof(prefix) - 1, d);
+	}
 	oldlen = strlen(name);
 	memset(name + oldlen, ' ', sizeof(name) - oldlen - 1);
 	name[sizeof(name) - 1] = '\0';
