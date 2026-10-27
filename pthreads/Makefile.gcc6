@@ -130,7 +130,7 @@ pthread:
 	$(SUBMAKE) -C $(kind) libpthread.a lib=pthread
 
 # build the lib base on $(lib), $(kind) and $(flags)
-lib$(libname).a: $(root)/pthread.c $(root)/sched.c $(root)/semaphore.c $(stolen) $(shell find $(root)/$(HEADERS)/* -name '*.h') $(root)/Makefile.gcc6
+lib$(libname).a: $(wildcard $(root)/pthread_*.c) $(root)/sched.c $(root)/semaphore.c $(stolen) $(shell find $(root)/$(HEADERS)/* -name '*.h') $(root)/Makefile.gcc6
 	@mkdir -p $(lib)
 	@echo compiling for $(kind)/$@ using $(CC) -c $(CFLAGS) $(flags)
 	@touch -t 0001010000 $(lib)/stamp && if [ -e $@ ]; then touch -r $@ $(lib)/stamp; fi
