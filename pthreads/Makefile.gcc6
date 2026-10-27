@@ -86,10 +86,32 @@ check_one:
 	$(quiet) "  LD      $(kind)/tests/joinsig"
 	$(Q)$(CC) $(flags) -mcrt=nix20 -O2 -Wall -I$(root) \
 		$(root)/tests/joinsig.c -L$(kind) -lpthread -o $(kind)/tests/joinsig
+	$(quiet) "  LD      $(kind)/tests/names"
+	$(Q)$(CC) $(flags) -mcrt=nix20 -O2 -Wall -I$(root) \
+		$(root)/tests/names.c -L$(kind) -lpthread -o $(kind)/tests/names
+	$(Q)for crt in nix20 newlib; do \
+		$(SUBMAKE) check_link kind=$(kind) flags="$(flags)" crt=$$crt || exit 1; \
+	done
 	@if printf '#include <thread>\n#ifndef _GLIBCXX_HAS_GTHREADS\n#error no thread support\n#endif\n' | \
 		$(CXX) $(flags) -x c++ -fsyntax-only - >/dev/null 2>&1; then \
 		$(SUBMAKE) check_cxx_one kind=$(kind) flags="$(flags)"; \
 	else echo "SKIP $(kind) C++ tests: libstdc++ has no thread support"; fi
+
+# What a program links from libpthread, with the $(crt) runtime: the calls
+# libstdc++ makes without starting a thread must not bring pthread_create,
+# and creating a thread must not bring the C library's snprintf.
+NM = $(CC:%gcc=%nm)
+.PHONY: check_link
+check_link:
+	$(quiet) "  CHECK   $(kind)/tests/gthr_link-$(crt) $(kind)/tests/create_link-$(crt)"
+	$(Q)$(CC) $(flags) -mcrt=$(crt) -O2 -Wall -I$(root) \
+		$(root)/tests/gthr_link.c -L$(kind) -lpthread -o $(kind)/tests/gthr_link-$(crt)
+	$(Q)if $(NM) $(kind)/tests/gthr_link-$(crt) | grep -q ' _pthread_create$$'; then \
+		echo "FAIL $(kind)/tests/gthr_link-$(crt) links pthread_create"; exit 1; fi
+	$(Q)$(CC) $(flags) -mcrt=$(crt) -O2 -Wall -I$(root) \
+		$(root)/tests/create_link.c -L$(kind) -lpthread -o $(kind)/tests/create_link-$(crt)
+	$(Q)if $(NM) $(kind)/tests/create_link-$(crt) | grep -q ' _snprintf$$'; then \
+		echo "FAIL $(kind)/tests/create_link-$(crt) links snprintf"; exit 1; fi
 
 .PHONY: check_cxx_one
 check_cxx_one:
