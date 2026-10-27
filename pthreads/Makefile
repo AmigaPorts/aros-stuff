@@ -29,7 +29,17 @@ endif
 
 
 OBJ = \
-	pthread.o \
+	pthread_attr.o \
+	pthread_barrier.o \
+	pthread_cancel.o \
+	pthread_cond.o \
+	pthread_core.o \
+	pthread_key.o \
+	pthread_mutex.o \
+	pthread_once.o \
+	pthread_rwlock.o \
+	pthread_spin.o \
+	pthread_thread.o \
 	sched.o \
 	semaphore.o
 
