@@ -38,3 +38,21 @@ microsecond subtraction, the first wait returns because of that signal
 instead of its deadline, so the regression fails without an indefinite
 hang. This validates native timer.device behavior; linking on the host does
 not execute the test.
+
+## TLS key allocation and table relocation
+
+`make -f Makefile.gcc6 check` also builds `tlskeys-0`, `tlskeys-1` and
+`tlskeys-2` for each multilib. Run each on AmigaOS; all must print
+`tlskeys OK` and return zero. Modes exercise allocation of all keys,
+set-specific during table growth, and deletion during table growth.
+
+The link-time realloc wrapper affects only this test's TLS table. It
+supplies nonzero fresh storage or moves the table and quarantines the old
+allocation. The concurrency tests hold the real TLS semaphore and observe
+the worker in its Exec waiter queue before triggering growth. This makes
+the interleaving deterministic; it does not measure its frequency with an
+ordinary allocator. The test includes the internal header intentionally.
+
+For diagnostic comparison with an older archive, compile with
+`-DEXPECT_BROKEN=1`; zero exit then means the expected defect was reproduced,
+not that the library passed. The ordinary `check` targets expect the fixes.

@@ -3,6 +3,8 @@
  Copyright (C) 2018 Harry Sintonen
  Copyright (C) 2019/20 Stefan "Bebbo" Franke - AmigaOS 3 port / bug fixes
 
+ Altered in 2026: initialize TLS slots and protect their lookup.
+
  This software is provided 'as-is', without any express or implied
  warranty.  In no event will the authors be held liable for any damages
  arising from the use of this software.
@@ -59,6 +61,7 @@ int pthread_key_create(pthread_key_t *key, void (*destructor)(void*)) {
 			return EAGAIN;
 		}
 
+		memset(t + numTlskeys, 0, (n - numTlskeys) * sizeof(*t));
 		_tlskeys = t;
 		numTlskeys = n;
 	}
@@ -79,12 +82,14 @@ int pthread_key_delete(pthread_key_t key) {
 
 	D(bug("%s(%ld)\n", __FUNCTION__, key));
 
-	if (key >= numTlskeys)
+	ObtainSemaphore(&tls_sem);
+
+	if (key >= numTlskeys) {
+		ReleaseSemaphore(&tls_sem);
 		return EINVAL;
+	}
 
 	tls = &_tlskeys[key];
-
-	ObtainSemaphore(&tls_sem);
 
 	if (tls->used == FALSE) {
 		ReleaseSemaphore(&tls_sem);
@@ -106,13 +111,15 @@ int pthread_setspecific(pthread_key_t key, const void *value) {
 
 	D(bug("%s(%ld)\n", __FUNCTION__, key));
 
-	if (key >= numTlskeys)
-		return EINVAL;
-
 	thread = pthread_self();
-	tls = &_tlskeys[key];
-
 	ObtainSemaphoreShared(&tls_sem);
+
+	if (key >= numTlskeys) {
+		ReleaseSemaphore(&tls_sem);
+		return EINVAL;
+	}
+
+	tls = &_tlskeys[key];
 
 	if (tls->used == FALSE) {
 		ReleaseSemaphore(&tls_sem);
