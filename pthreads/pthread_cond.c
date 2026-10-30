@@ -3,6 +3,8 @@
  Copyright (C) 2018 Harry Sintonen
  Copyright (C) 2019/20 Stefan "Bebbo" Franke - AmigaOS 3 port / bug fixes
 
+ Altered in 2026: normalize signed condition timeout intervals.
+
  This software is provided 'as-is', without any express or implied
  warranty.  In no event will the authors be held liable for any damages
  arising from the use of this software.
@@ -105,6 +107,9 @@ static int _pthread_cond_timedwait(pthread_cond_t *cond, pthread_mutex_t *mutex,
 
 	if (cond == NULL || mutex == NULL)
 		return EINVAL;
+	if (abstime && (abstime->tv_nsec < 0 || abstime->tv_nsec >= 1000000000L
+			|| (relative && abstime->tv_sec < 0)))
+		return EINVAL;
 
 	pthread_testcancel();
 
@@ -157,7 +162,23 @@ static int _pthread_cond_timedwait(pthread_cond_t *cond, pthread_mutex_t *mutex,
 			// absolute time has to be converted to relative
 			// GetSysTime can't be used due to the timezone offset in abstime
 			gettimeofday(&starttime, NULL);
-			timersub(&timerio.tr_time, &starttime, &timerio.tr_time);
+			/* NDK timeval fields are unsigned: the BSD timersub macro
+			 * loses its negative-microsecond test after integer promotion.
+			 * Use a signed wide seconds difference, normalize the borrow,
+			 * and never send an expired interval as an unsigned huge wait.
+			 * Even expired waits go through the normal unlock/relock path. */
+			long long seconds = (long long)abstime->tv_sec - starttime.tv_sec;
+			long microseconds = abstime->tv_nsec / 1000 - (long)starttime.tv_usec;
+			if (microseconds < 0) {
+				--seconds;
+				microseconds += 1000000;
+			}
+			if (seconds < 0 || (!seconds && !microseconds)) {
+				seconds = 0;
+				microseconds = 1;
+			}
+			timerio.tr_time.tv_sec = seconds;
+			timerio.tr_time.tv_usec = microseconds;
 		}
 		timermask = 1 << timermp.mp_SigBit;
 		sigs |= timermask;
