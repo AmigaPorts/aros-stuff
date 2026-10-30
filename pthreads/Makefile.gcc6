@@ -92,6 +92,13 @@ check_one:
 	$(quiet) "  LD      $(kind)/tests/condtime"
 	$(Q)$(CC) $(flags) -mcrt=nix20 -O2 -Wall -I$(root) \
 		$(root)/tests/condtime.c -L$(kind) -lpthread -o $(kind)/tests/condtime
+	$(quiet) "  LD      $(kind)/tests/tlskeys-{0,1,2}"
+	$(Q)for mode in 0 1 2; do \
+		$(CC) $(flags) -mcrt=nix20 -O2 -Wall -I$(root) \
+			-DKEY_TEST_MODE=$$mode $(root)/tests/tlskeys.c \
+			-Wl,--wrap=realloc -L$(kind) -lpthread \
+			-o $(kind)/tests/tlskeys-$$mode || exit 1; \
+	done
 	$(Q)for crt in nix20 newlib; do \
 		$(SUBMAKE) check_link kind=$(kind) flags="$(flags)" crt=$$crt || exit 1; \
 	done
