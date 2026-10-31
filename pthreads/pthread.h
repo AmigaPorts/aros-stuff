@@ -22,6 +22,13 @@
 #ifndef PTHREAD_H
 #define PTHREAD_H
 
+/* libpthread is built against libnix: it calls libnix's errno, setjmp(),
+   gettimeofday() and malloc(), and its headers need newlib's types, which
+   clash with clib2's */
+#if defined(__CLIB2__)
+#error "pthreads are not available with -mcrt=clib2: use -mcrt=nix20 or -mcrt=newlib"
+#endif
+
 #include <errno.h>
 #include <sched.h>
 
