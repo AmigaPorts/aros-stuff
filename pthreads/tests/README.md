@@ -24,3 +24,17 @@ fails if a program that only makes libstdc++'s pthread calls links
 checks need no Amiga.
 The C++ tests are GPL-3.0-or-later, while `joinsig.c` follows the pthreads
 zlib licence as stated in its source header.
+
+## Condition deadlines
+
+`make -f Makefile.gcc6 check` also builds `condtime` for each multilib.
+Run it on AmigaOS and require `condtime OK` with return code zero. It checks
+an absolute deadline crossing a second, an expired deadline, invalid
+nanoseconds/relative seconds and a valid relative timeout. An error-checking
+mutex verifies that the wait returns with ownership restored.
+
+A watchdog signals the condition after two seconds. With the old unsigned
+microsecond subtraction, the first wait returns because of that signal
+instead of its deadline, so the regression fails without an indefinite
+hang. This validates native timer.device behavior; linking on the host does
+not execute the test.
