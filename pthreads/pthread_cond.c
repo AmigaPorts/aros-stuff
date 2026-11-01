@@ -168,8 +168,12 @@ static int _pthread_cond_timedwait(pthread_cond_t *cond, pthread_mutex_t *mutex,
 			 * and never send an expired interval as an unsigned huge wait.
 			 * Even expired waits go through the normal unlock/relock path. */
 			long long seconds = (long long)abstime->tv_sec - starttime.tv_sec;
-			long microseconds = abstime->tv_nsec / 1000 - (long)starttime.tv_usec;
-			if (microseconds < 0) {
+			/* Round the deadline up, so that the wait never ends before it. */
+			long microseconds = (abstime->tv_nsec + 999) / 1000 - (long)starttime.tv_usec;
+			if (microseconds >= 1000000) {
+				++seconds;
+				microseconds -= 1000000;
+			} else if (microseconds < 0) {
 				--seconds;
 				microseconds += 1000000;
 			}
