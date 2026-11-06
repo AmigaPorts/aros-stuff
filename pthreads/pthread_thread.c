@@ -22,6 +22,21 @@
 
 #include "pthread_intern.h"
 
+#if defined(__amigaos3__) && __GNUC__ >= 16
+// GCC's own thread model keeps C and C++ thread-local variables per task, in a
+// block the task gets as it starts: the creator keeps one ready, the thread puts
+// it on before any other code, and at its end its destructors run and the block
+// goes back. A creator that fails to start the thread gives the block back.
+// libgcc has these with any thread model.
+extern int __gthread_amigaos_task_new(void) __stdargs;
+extern void __gthread_amigaos_task_start(void) __stdargs;
+extern void __gthread_amigaos_task_cancel(void) __stdargs;
+extern void __gthread_amigaos_task_end(struct Task *) __stdargs;
+#define TASK_CANCEL() __gthread_amigaos_task_cancel()
+#else
+#define TASK_CANCEL() ((void) 0)
+#endif
+
 //
 // Thread functions
 //
@@ -94,6 +109,9 @@ static void StarterFunc(void) {
 	proc->pr_CIS = 0;
 #else
 	inf = (pthread_t)FindTask(NULL)->tc_UserData;
+#endif
+#if defined(__amigaos3__) && __GNUC__ >= 16
+	__gthread_amigaos_task_start();
 #endif
 
 	DB2(bug("%s(%ld)\n", __FUNCTION__, pid));
@@ -178,6 +196,9 @@ static void StarterFunc(void) {
 		}
 	}
 	ReleaseSemaphore(&tls_sem);
+#if defined(__amigaos3__) && __GNUC__ >= 16
+	__gthread_amigaos_task_end(FindTask(NULL));
+#endif
 
 	// inf may be invalid due to realloc
 	ObtainSemaphore(&thread_sem);
@@ -228,9 +249,17 @@ int pthread_create(pthread_t *thread, const pthread_attr_t *attr, void* (*start)
 	// from now on, the exit code has threads to join
 	__pthread_join_hook = pthread_join;
 
+#if defined(__amigaos3__) && __GNUC__ >= 16
+	if (__gthread_amigaos_task_new()) {
+		ReleaseSemaphore(&thread_sem);
+		return EAGAIN;
+	}
+#endif
+
 	// grab an empty thread slot
 	threadnew = GetThreadId(NULL);
 	if (threadnew == PTHREAD_THREADS_MAX) {
+		TASK_CANCEL();
 		ReleaseSemaphore(&thread_sem);
 		return EAGAIN;
 	}
@@ -250,6 +279,7 @@ int pthread_create(pthread_t *thread, const pthread_attr_t *attr, void* (*start)
 				ThreadInfo *t = (ThreadInfo*) calloc(1, sizeof(ThreadInfo));
 				if (!t) {
 					numThreads = i;
+					TASK_CANCEL();
 					ReleaseSemaphore(&thread_sem);
 					return EAGAIN;
 				}
@@ -324,8 +354,10 @@ int pthread_create(pthread_t *thread, const pthread_attr_t *attr, void* (*start)
 
 	{
 		struct Task *started = inf->task;
-		if (!started)
+		if (!started) {
 			inf->parent = NULL;
+			TASK_CANCEL();
+		}
 		ReleaseSemaphore(&thread_sem);
 
 		D(bug("new thread=%ld, task=%8lx\n", threadnew, started));
