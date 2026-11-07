@@ -92,6 +92,18 @@ check_one:
 	$(quiet) "  LD      $(kind)/tests/condtime"
 	$(Q)$(CC) $(flags) -mcrt=nix20 -O2 -Wall -I$(root) \
 		$(root)/tests/condtime.c -L$(kind) -lpthread -o $(kind)/tests/condtime
+	$(quiet) "  LD      $(kind)/tests/pmin"
+	$(Q)$(CC) $(flags) -mcrt=nix20 -O2 -Wall -I$(root) \
+		$(root)/tests/pmin.c -L$(kind) -lpthread -o $(kind)/tests/pmin
+	$(quiet) "  LD      $(kind)/tests/c-tls"
+	$(Q)$(CC) $(flags) -mcrt=nix20 -O2 -Wall -I$(root) \
+		$(root)/tests/c-tls.c -L$(kind) -lpthread -o $(kind)/tests/c-tls
+	$(quiet) "  LD      $(kind)/tests/c-tls-newlib"
+	$(Q)$(CC) $(flags) -mcrt=newlib -O2 -Wall -I$(root) \
+		$(root)/tests/c-tls.c -L$(kind) -lpthread -o $(kind)/tests/c-tls-newlib
+	$(quiet) "  LD      $(kind)/tests/nlstress"
+	$(Q)$(CC) $(flags) -mcrt=newlib -O2 -Wall -I$(root) \
+		$(root)/tests/nlstress.c -L$(kind) -lpthread -o $(kind)/tests/nlstress
 	$(quiet) "  LD      $(kind)/tests/tlskeys-{0,1,2}"
 	$(Q)for mode in 0 1 2; do \
 		$(CC) $(flags) -mcrt=nix20 -O2 -Wall -I$(root) \
