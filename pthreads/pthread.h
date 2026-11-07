@@ -185,11 +185,21 @@ struct pthread_mutexattr
 
 typedef struct pthread_mutexattr pthread_mutexattr_t;
 
+/* <benaphore.h>'s benaphore_recursive_t, laid out here so that this header
+   doesn't bring in its inline functions: the lock with its sleepers, the
+   owner task and its count.  All zeros is unlocked. */
+struct __pthread_benaphore
+{
+	void *__last;
+	void *__owner;
+	unsigned long __count;
+};
+
 struct pthread_mutex
 {
 	int kind;
-	__PTHREAD_SEMAPHORE_TYPE semaphore;
-	int incond;
+	struct __pthread_benaphore lock;
+	int incond;		/* tasks in a condition wait on it */
 };
 
 typedef struct pthread_mutex pthread_mutex_t;
@@ -204,9 +214,10 @@ typedef struct pthread_mutex pthread_mutex_t;
 #define NULL_SEMAPHOREREQUEST {NULL_MINNODE, 0}
 #define NULL_SEMAPHORE {NULL_NODE, 0, NULL_MINLIST, NULL_SEMAPHOREREQUEST, 0, 0}
 
-#define PTHREAD_MUTEX_INITIALIZER {PTHREAD_MUTEX_NORMAL, NULL_SEMAPHORE, 0}
-#define PTHREAD_RECURSIVE_MUTEX_INITIALIZER {PTHREAD_MUTEX_RECURSIVE, NULL_SEMAPHORE, 0}
-#define PTHREAD_ERRORCHECK_MUTEX_INITIALIZER {PTHREAD_MUTEX_ERRORCHECK, NULL_SEMAPHORE, 0}
+#define __PTHREAD_BENAPHORE_INITIALIZER {0, 0, 0}
+#define PTHREAD_MUTEX_INITIALIZER {PTHREAD_MUTEX_NORMAL, __PTHREAD_BENAPHORE_INITIALIZER, 0}
+#define PTHREAD_RECURSIVE_MUTEX_INITIALIZER {PTHREAD_MUTEX_RECURSIVE, __PTHREAD_BENAPHORE_INITIALIZER, 0}
+#define PTHREAD_ERRORCHECK_MUTEX_INITIALIZER {PTHREAD_MUTEX_ERRORCHECK, __PTHREAD_BENAPHORE_INITIALIZER, 0}
 
 //
 // Condition variables
@@ -219,16 +230,19 @@ struct pthread_condattr
 
 typedef struct pthread_condattr pthread_condattr_t;
 
+/* <benaphore.h>'s benaphore_cond_t: the first and the last waiter.  All
+   zeros has none. */
 struct pthread_cond
 {
-	int pad1;
-	__PTHREAD_SEMAPHORE_TYPE semaphore;
-	__PTHREAD_MINLIST_TYPE waiters;
+	void *__head, *__tail;
 };
 
 typedef struct pthread_cond pthread_cond_t;
 
-#define PTHREAD_COND_INITIALIZER {0, NULL_SEMAPHORE, NULL_MINLIST}
+/* newlib's <sys/_pthreadtypes.h> has a copy of the initializer for the
+   layout before this one: this header's is the one that holds. */
+#undef PTHREAD_COND_INITIALIZER
+#define PTHREAD_COND_INITIALIZER {0, 0}
 
 //
 // Barriers

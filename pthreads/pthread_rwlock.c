@@ -3,6 +3,8 @@
  Copyright (C) 2018 Harry Sintonen
  Copyright (C) 2019/20 Stefan "Bebbo" Franke - AmigaOS 3 port / bug fixes
 
+ Altered in 2026: the timed semaphore obtain moved here from pthread_mutex.c.
+
  This software is provided 'as-is', without any express or implied
  warranty.  In no event will the authors be held liable for any damages
  arising from the use of this software.
@@ -21,6 +23,85 @@
  */
 
 #include "pthread_intern.h"
+
+#if defined(__MORPHOS__) || defined(__AMIGA__)
+static int _obtain_sema_timed(struct SignalSemaphore *sema, const struct timeval *end, int shared) {
+	struct MsgPort msgport;
+	struct SemaphoreMessage msg;
+#ifndef __AMIGA__
+	struct Message *m1, *m2;
+#endif
+	struct timerequest timerio;
+	struct Task *task;
+
+#ifdef __AMIGA__
+	task = SysBase->ThisTask;
+#else
+	task = FindTask(NULL);
+#endif
+
+	msgport.mp_SigBit = AllocSignal(-1);
+	if ((BYTE) msgport.mp_SigBit == -1)
+		return EINVAL;
+	msgport.mp_Node.ln_Type = NT_MSGPORT;
+	msgport.mp_Flags = PA_SIGNAL;
+	msgport.mp_SigTask = task;
+	NEWLIST(&msgport.mp_MsgList);
+
+	msg.ssm_Semaphore = 0;
+	msg.ssm_Message.mn_Node.ln_Type = NT_MESSAGE;
+	msg.ssm_Message.mn_Node.ln_Name = (char*) shared;
+	msg.ssm_Message.mn_ReplyPort = &msgport;
+
+	timerio.tr_node.io_Message.mn_Node.ln_Type = NT_MESSAGE;
+	timerio.tr_node.io_Command = TR_ADDREQUEST;
+	timerio.tr_node.io_Message.mn_ReplyPort = &msgport;
+#ifdef __AMIGA__
+	timerio.tr_time = *end;
+	timerio.tr_node.io_Device = DOSBase->dl_TimeReq->tr_node.io_Device;
+	timerio.tr_node.io_Unit = DOSBase->dl_TimeReq->tr_node.io_Unit;
+
+	// Procure is broken on older systems... hand made...
+	struct SemaphoreRequest sr;
+	sr.sr_Waiter = task;
+
+	SendIO((APTR) & timerio);
+
+	ULONG mask = SIGF_SINGLE | (1 << msgport.mp_SigBit);
+	Forbid();
+	task->tc_SigRecvd &= ~mask;
+	AddTail((struct List*) &sema->ss_WaitQueue, (struct Node*) &sr.sr_Link);
+	ULONG signal = Wait(mask);
+	Permit();
+
+	if (signal & SIGF_SINGLE) {
+		msg.ssm_Semaphore = sema;
+	}
+#else
+	UNIXTIME_TO_AMIGATIME(end, &timerio.tr_time);
+	timerio.tr_node.io_Device = waitutc.tr_node.io_Device;
+	timerio.tr_node.io_Unit	= waitutc.tr_node.io_Unit;
+
+	Procure(sema, &msg);
+	SendIO((APTR)&timerio);
+
+	WaitPort(&msgport);
+	m1 = GetMsg(&msgport);
+	m2 = GetMsg(&msgport);
+	if (m1 == &timerio.tr_node.io_Message || m2 == &timerio.tr_node.io_Message)
+		Vacate(sema, &msg);
+#endif
+
+	else {
+		AbortIO((APTR) & timerio);
+		WaitIO((APTR) & timerio);
+	}
+	FreeSignal(msgport.mp_SigBit);
+	if (msg.ssm_Semaphore == 0)
+		return ETIMEDOUT;
+	return 0;
+}
+#endif
 
 //
 // Read-write lock attribute functions

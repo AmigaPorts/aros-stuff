@@ -53,6 +53,7 @@
 
 #include "pthread.h"
 #include "debug.h"
+#include <benaphore.h>
 
 #if defined(__AMIGA__)
 #include <exec/execbase.h>
@@ -75,22 +76,12 @@
 
 #define SIGB_PARENT SIGBREAKB_CTRL_F
 #define SIGF_PARENT (1 << SIGB_PARENT)
-#define SIGB_COND_FALLBACK SIGBREAKB_CTRL_E
-#define SIGF_COND_FALLBACK (1 << SIGB_COND_FALLBACK)
-#define SIGB_TIMER_FALLBACK SIGBREAKB_CTRL_D
-#define SIGF_TIMER_FALLBACK (1 << SIGB_TIMER_FALLBACK)
 
 #define NAMELEN 32
 #define PTHREAD_FIRST_THREAD_ID (1)
 #define PTHREAD_BARRIER_FLAG (1UL << 31)
 
 //#define USE_ASYNC_CANCEL
-
-typedef struct {
-	struct MinNode node;
-	struct Task *task;
-	ULONG sigmask;
-} CondWaiter;
 
 typedef struct {
 	void (*destructor)(void*);
@@ -147,14 +138,37 @@ extern struct SignalSemaphore tls_sem;
    link the thread code. */
 extern int (*__pthread_join_hook)(pthread_t, void **);
 
-#if defined(__MORPHOS__) || defined(__AMIGA__)
-#define _obtain_sema_timed __pthread_obtain_sema_timed
-int _obtain_sema_timed(struct SignalSemaphore *sema, const struct timeval *end, int shared);
-#endif
-
 //
 // Helper functions
 //
+
+/* pthread.h lays out <benaphore.h>'s types for its users, so that it needn't
+   include that: libpthread takes them as the real ones. */
+_Static_assert(sizeof(struct __pthread_benaphore) == sizeof(benaphore_recursive_t)
+	       && __builtin_offsetof(struct __pthread_benaphore, __owner)
+		  == __builtin_offsetof(benaphore_recursive_t, __owner)
+	       && __builtin_offsetof(struct __pthread_benaphore, __count)
+		  == __builtin_offsetof(benaphore_recursive_t, __count),
+	       "pthread_mutex_t's lock is not a benaphore_recursive_t");
+_Static_assert(sizeof(pthread_cond_t) == sizeof(benaphore_cond_t),
+	       "pthread_cond_t is not a benaphore_cond_t");
+
+static inline benaphore_recursive_t *MutexLock(pthread_mutex_t *mutex) {
+	return (benaphore_recursive_t *) &mutex->lock;
+}
+
+static inline benaphore_cond_t *CondQueue(pthread_cond_t *cond) {
+	return (benaphore_cond_t *) cond;
+}
+
+/* A timespec deadline, as <benaphore.h> takes it. */
+static inline benaphore_time_t Deadline(const struct timespec *ts) {
+	benaphore_time_t d;
+
+	d.__sec = ts->tv_sec;
+	d.__nsec = ts->tv_nsec;
+	return d;
+}
 
 static inline int SemaphoreIsInvalid(struct SignalSemaphore *sem) {
 	int r = (!sem || sem->ss_Link.ln_Type != NT_SIGNALSEM || sem->ss_WaitQueue.mlh_Tail != NULL);
