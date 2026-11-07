@@ -56,3 +56,19 @@ ordinary allocator. The test includes the internal header intentionally.
 For diagnostic comparison with an older archive, compile with
 `-DEXPECT_BROKEN=1`; zero exit then means the expected defect was reproduced,
 not that the library passed. The ordinary `check` targets expect the fixes.
+
+## Threads, thread-locals and newlib
+
+`make -f Makefile.gcc6 check` also builds these for each multilib. Run them
+on AmigaOS; each must return zero.
+
+| program | runs | checks |
+|---|---|---|
+| `pmin 3 tls` | three threads that return their argument, each touching a thread-local first | the joins return what each thread returned |
+| `c-tls`, `c-tls-newlib` | four threads at once, then 30 one after the other | `_Thread_local` with an initializer and `__thread` without one start at their initial values and stay per thread |
+| `nlstress` | four threads at different priorities in newlib's `malloc()`, `realloc()`, `free()` and stdio, with `%f` | every line written to the shared FILE is whole, each thread's are all there and in order, and no thread's blocks were overwritten |
+
+`nlstress` and `c-tls-newlib` are built with `-mcrt=newlib`, the others with
+libnix. They call newlib's `malloc()` from several threads at once, so they
+need a newlib that locks it (AmigaPorts/newlib-cygwin#51, in a toolchain built
+with a thread model): with an older one they can fail.
