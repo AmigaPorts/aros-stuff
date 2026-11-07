@@ -3,7 +3,8 @@
  Copyright (C) 2018 Harry Sintonen
  Copyright (C) 2019/20 Stefan "Bebbo" Franke - AmigaOS 3 port / bug fixes
 
- Altered in 2026: the timed semaphore obtain moved here from pthread_mutex.c.
+ Altered in 2026: the timed semaphore obtain moved here from pthread_mutex.c,
+ and waits for the time left until its deadline.
 
  This software is provided 'as-is', without any express or implied
  warranty.  In no event will the authors be held liable for any damages
@@ -35,7 +36,18 @@ static int _obtain_sema_timed(struct SignalSemaphore *sema, const struct timeval
 	struct Task *task;
 
 #ifdef __AMIGA__
+	struct timeval now;
+	long long us;
+
 	task = SysBase->ThisTask;
+
+	// the deadline is absolute, on gettimeofday()'s clock; the timer wants
+	// the time left
+	gettimeofday(&now, NULL);
+	us = ((long long) end->tv_sec - now.tv_sec) * 1000000
+		+ (long) end->tv_usec - (long) now.tv_usec;
+	if (us <= 0)
+		return ETIMEDOUT;
 #else
 	task = FindTask(NULL);
 #endif
@@ -57,7 +69,8 @@ static int _obtain_sema_timed(struct SignalSemaphore *sema, const struct timeval
 	timerio.tr_node.io_Command = TR_ADDREQUEST;
 	timerio.tr_node.io_Message.mn_ReplyPort = &msgport;
 #ifdef __AMIGA__
-	timerio.tr_time = *end;
+	timerio.tr_time.tv_secs = us / 1000000;
+	timerio.tr_time.tv_micro = us % 1000000;
 	timerio.tr_node.io_Device = DOSBase->dl_TimeReq->tr_node.io_Device;
 	timerio.tr_node.io_Unit = DOSBase->dl_TimeReq->tr_node.io_Unit;
 
