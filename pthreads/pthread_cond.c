@@ -4,6 +4,7 @@
  Copyright (C) 2019/20 Stefan "Bebbo" Franke - AmigaOS 3 port / bug fixes
 
  Altered in 2026: normalize signed condition timeout intervals.
+ Altered in 2026: condition variables on <benaphore.h>.
 
  This software is provided 'as-is', without any express or implied
  warranty.  In no event will the authors be held liable for any damages
@@ -53,6 +54,10 @@ int pthread_condattr_destroy(pthread_condattr_t *attr) {
 //
 // Condition variable functions
 //
+// <benaphore.h>'s condition variables: a queue of the waiting tasks, which
+// the wait joins and gives the mutex up in one step for the tasks that
+// signal.  All zeros has no waiters, so the static initializer needs
+// nothing at run time.
 
 int pthread_cond_init(pthread_cond_t *cond, const pthread_condattr_t *attr) {
 	D(bug("%s(%8lx, %8lx)\n", __FUNCTION__, cond, attr));
@@ -60,8 +65,7 @@ int pthread_cond_init(pthread_cond_t *cond, const pthread_condattr_t *attr) {
 	if (cond == NULL)
 		return EINVAL;
 
-	InitSemaphore(&cond->semaphore);
-	NEWLIST((struct List* )&cond->waiters);
+	memset(cond, 0, sizeof(pthread_cond_t));
 
 	return 0;
 }
@@ -72,220 +76,96 @@ int pthread_cond_destroy(pthread_cond_t *cond) {
 	if (cond == NULL)
 		return EINVAL;
 
-	// probably a statically allocated condition
-	if (SemaphoreIsInvalid(&cond->semaphore))
-		return 0;
-
-	if (AttemptSemaphore(&cond->semaphore) == FALSE)
+	if (CondQueue(cond)->__head)
 		return EBUSY;
 
-	if (!IsListEmpty((struct List*) &cond->waiters)) {
-		ReleaseSemaphore(&cond->semaphore);
-		return EBUSY;
-	}
-
-	ReleaseSemaphore(&cond->semaphore);
 	memset(cond, 0, sizeof(pthread_cond_t));
 
 	return 0;
 }
 
-#ifndef timersub
-extern void timersub(struct timeval *a, struct timeval *b, struct timeval *res);
-#endif
-
-static int _pthread_cond_timedwait(pthread_cond_t *cond, pthread_mutex_t *mutex, const struct timespec *abstime, BOOL relative) {
-	CondWaiter waiter;
-	BYTE signal;
-	ULONG sigs = 0;
-	ULONG timermask = 0;
-	struct MsgPort timermp;
-	struct timerequest timerio;
-	struct Task *task;
-
-	DB2(bug("%s(%8lx, %8lx, %8lx)\n", __FUNCTION__, cond, mutex, abstime));
-
-	if (cond == NULL || mutex == NULL)
-		return EINVAL;
-	if (abstime && (abstime->tv_nsec < 0 || abstime->tv_nsec >= 1000000000L
-			|| (relative && abstime->tv_sec < 0)))
-		return EINVAL;
+// The mutex is given up whatever its count, and taken back with it.
+static int _pthread_cond_wait(pthread_cond_t *cond, pthread_mutex_t *mutex, const benaphore_time_t *deadline) {
+	benaphore_recursive_t *r;
+	int err = 0;
 
 	pthread_testcancel();
 
-	// initialize static conditions
-	if (SemaphoreIsInvalid(&cond->semaphore))
-		pthread_cond_init(cond, NULL);
+	r = MutexLock(mutex);
+	if (__atomic_load_n(&r->__owner, __ATOMIC_RELAXED) != SysBase->ThisTask)
+		return EPERM;
 
-#ifdef __AMIGA__
-	task = SysBase->ThisTask;
-#else
-	task = FindTask(NULL);
-#endif
-
-	if (abstime) {
-		// prepare MsgPort
-		timermp.mp_Node.ln_Type = NT_MSGPORT;
-		timermp.mp_Node.ln_Pri = 0;
-		timermp.mp_Node.ln_Name = NULL;
-		timermp.mp_Flags = PA_SIGNAL;
-		timermp.mp_SigTask = task;
-		signal = AllocSignal(-1);
-		if (signal == -1) {
-			signal = SIGB_TIMER_FALLBACK;
-			SetSignal(SIGF_TIMER_FALLBACK, 0);
-		}
-		timermp.mp_SigBit = signal;
-		NEWLIST(&timermp.mp_MsgList);
-
-		// prepare IORequest
-		timerio.tr_node.io_Message.mn_Node.ln_Type = NT_MESSAGE;
-		timerio.tr_node.io_Message.mn_Node.ln_Pri = 0;
-		timerio.tr_node.io_Message.mn_Node.ln_Name = NULL;
-		timerio.tr_node.io_Message.mn_ReplyPort = &timermp;
-		timerio.tr_node.io_Message.mn_Length = sizeof(struct timerequest);
-
-		// open timer.device
-		if (OpenDevice((STRPTR) TIMERNAME, UNIT_MICROHZ, &timerio.tr_node, 0) != 0) {
-			if (timermp.mp_SigBit != SIGB_TIMER_FALLBACK)
-				FreeSignal(timermp.mp_SigBit);
-
-			return EINVAL;
-		}
-
-		// prepare the device command and send it
-		timerio.tr_node.io_Command = TR_ADDREQUEST;
-		timerio.tr_node.io_Flags = 0;
-		TIMESPEC_TO_TIMEVAL(&timerio.tr_time, abstime);
-		if (!relative) {
-			struct timeval starttime;
-			// absolute time has to be converted to relative
-			// GetSysTime can't be used due to the timezone offset in abstime
-			gettimeofday(&starttime, NULL);
-			/* NDK timeval fields are unsigned: the BSD timersub macro
-			 * loses its negative-microsecond test after integer promotion.
-			 * Use a signed wide seconds difference, normalize the borrow,
-			 * and never send an expired interval as an unsigned huge wait.
-			 * Even expired waits go through the normal unlock/relock path. */
-			long long seconds = (long long)abstime->tv_sec - starttime.tv_sec;
-			long microseconds = abstime->tv_nsec / 1000 - (long)starttime.tv_usec;
-			if (microseconds < 0) {
-				--seconds;
-				microseconds += 1000000;
-			}
-			if (seconds < 0 || (!seconds && !microseconds)) {
-				seconds = 0;
-				microseconds = 1;
-			}
-			timerio.tr_time.tv_sec = seconds;
-			timerio.tr_time.tv_usec = microseconds;
-		}
-		timermask = 1 << timermp.mp_SigBit;
-		sigs |= timermask;
-		SendIO((struct IORequest*) &timerio);
-	}
-
-	// prepare a waiter node
-	waiter.task = task;
-	signal = AllocSignal(-1);
-	if (signal == -1) {
-		signal = SIGB_COND_FALLBACK;
-		SetSignal(SIGF_COND_FALLBACK, 0);
-	}
-	waiter.sigmask = 1 << signal;
-	sigs |= waiter.sigmask;
-
-	// add it to the end of the list
-	ObtainSemaphore(&cond->semaphore);
-	AddTail((struct List*) &cond->waiters, (struct Node*) &waiter);
-	ReleaseSemaphore(&cond->semaphore);
-
-	// wait for the condition to be signalled or the timeout
 	mutex->incond++;
-	pthread_mutex_unlock(mutex);
-	sigs = Wait(sigs);
-	pthread_mutex_lock(mutex);
+	if (deadline)
+		err = benaphore_cond_timedwait_recursive(CondQueue(cond), r, deadline);
+	else
+		benaphore_cond_wait_recursive(CondQueue(cond), r);
 	mutex->incond--;
 
-	// remove the node from the list
-	ObtainSemaphore(&cond->semaphore);
-	Remove((struct Node*) &waiter);
-	ReleaseSemaphore(&cond->semaphore);
-
-	if (signal != SIGB_COND_FALLBACK)
-		FreeSignal(signal);
-
-	if (abstime) {
-		// clean up the timerequest
-		if (!CheckIO((struct IORequest*) &timerio)) {
-			AbortIO((struct IORequest*) &timerio);
-			WaitIO((struct IORequest*) &timerio);
-		}
-		CloseDevice((struct IORequest*) &timerio);
-
-		if (timermp.mp_SigBit != SIGB_TIMER_FALLBACK)
-			FreeSignal(timermp.mp_SigBit);
-
-		// did we timeout?
-		if (sigs & timermask)
-			return ETIMEDOUT;
-	}
-
-	return 0;
+	return err;
 }
 
 int pthread_cond_timedwait(pthread_cond_t *cond, pthread_mutex_t *mutex, const struct timespec *abstime) {
+	benaphore_time_t deadline;
+
 	D(bug("%s(%8lx, %8lx, %8lx)\n", __FUNCTION__, cond, mutex, abstime));
 
-	return _pthread_cond_timedwait(cond, mutex, abstime, FALSE);
+	if (cond == NULL || mutex == NULL || abstime == NULL
+			|| abstime->tv_nsec < 0 || abstime->tv_nsec >= 1000000000L)
+		return EINVAL;
+
+	deadline = Deadline(abstime);
+	return _pthread_cond_wait(cond, mutex, &deadline);
 }
 
 int pthread_cond_timedwait_relative_np(pthread_cond_t *cond, pthread_mutex_t *mutex, const struct timespec *reltime) {
+	benaphore_time_t deadline;
+	struct timeval now;
+
 	D(bug("%s(%8lx, %8lx, %8lx)\n", __FUNCTION__, cond, mutex, reltime));
 
-	return _pthread_cond_timedwait(cond, mutex, reltime, TRUE);
+	if (cond == NULL || mutex == NULL || reltime == NULL || reltime->tv_sec < 0
+			|| reltime->tv_nsec < 0 || reltime->tv_nsec >= 1000000000L)
+		return EINVAL;
+
+	// on the clock of the absolute deadlines
+	gettimeofday(&now, NULL);
+	deadline.__sec = (long long) now.tv_sec + reltime->tv_sec;
+	deadline.__nsec = now.tv_usec * 1000L + reltime->tv_nsec;
+	if (deadline.__nsec >= 1000000000L) {
+		deadline.__sec++;
+		deadline.__nsec -= 1000000000L;
+	}
+	return _pthread_cond_wait(cond, mutex, &deadline);
 }
 
 int pthread_cond_wait(pthread_cond_t *cond, pthread_mutex_t *mutex) {
 	D(bug("%s(%8lx)\n", __FUNCTION__, cond));
 
-	return _pthread_cond_timedwait(cond, mutex, NULL, FALSE);
-}
-
-static int _pthread_cond_broadcast(pthread_cond_t *cond, BOOL onlyfirst) {
-	CondWaiter *waiter;
-
-	DB2(bug("%s(%8lx, %ld)\n", __FUNCTION__, cond, onlyfirst));
-
-	if (cond == NULL)
+	if (cond == NULL || mutex == NULL)
 		return EINVAL;
 
-	// initialize static conditions
-	if (SemaphoreIsInvalid(&cond->semaphore))
-		pthread_cond_init(cond, NULL);
-
-	// signal the waiting threads 
-	ObtainSemaphore(&cond->semaphore);
-	ForeachNode(&cond->waiters, waiter)
-	{
-		Signal(waiter->task, waiter->sigmask);
-		if (onlyfirst)
-			break;
-	}
-	ReleaseSemaphore(&cond->semaphore);
-
-	return 0;
+	return _pthread_cond_wait(cond, mutex, NULL);
 }
 
 int pthread_cond_signal(pthread_cond_t *cond) {
 	D(bug("%s(%8lx)\n", __FUNCTION__, cond));
 
-	return _pthread_cond_broadcast(cond, TRUE);
+	if (cond == NULL)
+		return EINVAL;
+
+	benaphore_cond_signal(CondQueue(cond));
+
+	return 0;
 }
 
 int pthread_cond_broadcast(pthread_cond_t *cond) {
 	D(bug("%s(%8lx)\n", __FUNCTION__, cond));
 
-	return _pthread_cond_broadcast(cond, FALSE);
-}
+	if (cond == NULL)
+		return EINVAL;
 
+	benaphore_cond_broadcast(CondQueue(cond));
+
+	return 0;
+}
