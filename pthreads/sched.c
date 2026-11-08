@@ -2,6 +2,8 @@
   Copyright (C) 2014 Szilard Biro
   Copyright (C) 2018 Harry Sintonen
 
+  Altered in 2026: sched_yield() lets a thread of the same priority run.
+
   This software is provided 'as-is', without any express or implied
   warranty.  In no event will the authors be held liable for any damages
   arising from the use of this software.
@@ -50,7 +52,15 @@ int sched_yield(void)
 	// calling Permit() will trigger a reschedule
 	Forbid();
 #if defined(__AMIGA__)
-	SysBase->SysFlags |= 1<<15; // trigger rescheduling on Permit();
+	// End our time slice, as exec does when it runs out: a reschedule
+	// pending (bit 15) alone switches only to a higher-priority task, and
+	// with the slice over (bit 14) we also go behind the ready tasks of our
+	// own priority.  Atomically set both bits, since interrupts change
+	// SysFlags too.
+	__asm__ __volatile__ ("or.w %1,%0"
+			      : "+m" (SysBase->SysFlags)
+			      : "i" ((1 << 15) | (1 << 14))
+			      : "cc");
 #endif
 	Permit();
 #else
