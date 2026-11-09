@@ -16,7 +16,7 @@ m68k-amigaos-g++ -mcrt=nix20 -m68020 -m68881 -O2 -std=gnu++23 \
 `joinsig` must finish with `joinsig OK`, `names` with `names OK`. The C++ programs must finish with
 `t3 OK` and `t3w OK`; repeat them to exercise the thread table growth race.
 Use a libnix crt: the default newlib crt does not provide `gettimeofday()`
-for libpthread. `make -f Makefile.gcc6 check` builds the tests for each
+for libpthread. `make -f Makefile.m68k-amigaos check` builds the tests for each
 multilib; C++ builds are skipped when libstdc++ lacks thread support.
 It also links `gthr_link.c` and `create_link.c` with libnix and newlib and
 fails if a program that only makes libstdc++'s pthread calls links
@@ -27,7 +27,7 @@ zlib licence as stated in its source header.
 
 ## Condition deadlines
 
-`make -f Makefile.gcc6 check` also builds `condtime` for each multilib.
+`make -f Makefile.m68k-amigaos check` also builds `condtime` for each multilib.
 Run it on AmigaOS and require `condtime OK` with return code zero. It checks
 an absolute deadline crossing a second, an expired deadline, invalid
 nanoseconds/relative seconds and a valid relative timeout. An error-checking
@@ -41,7 +41,7 @@ not execute the test.
 
 ## TLS key allocation and table relocation
 
-`make -f Makefile.gcc6 check` also builds `tlskeys-0`, `tlskeys-1` and
+`make -f Makefile.m68k-amigaos check` also builds `tlskeys-0`, `tlskeys-1` and
 `tlskeys-2` for each multilib. Run each on AmigaOS; all must print
 `tlskeys OK` and return zero. Modes exercise allocation of all keys,
 set-specific during table growth, and deletion during table growth.
@@ -59,7 +59,7 @@ not that the library passed. The ordinary `check` targets expect the fixes.
 
 ## Threads, thread-locals and newlib
 
-`make -f Makefile.gcc6 check` also builds these for each multilib. Run them
+`make -f Makefile.m68k-amigaos check` also builds these for each multilib. Run them
 on AmigaOS; each must return zero.
 
 | program | runs | checks |
