@@ -120,7 +120,6 @@ int pthread_cond_timedwait(pthread_cond_t *cond, pthread_mutex_t *mutex, const s
 
 int pthread_cond_timedwait_relative_np(pthread_cond_t *cond, pthread_mutex_t *mutex, const struct timespec *reltime) {
 	benaphore_time_t deadline;
-	struct timeval now;
 
 	D(bug("%s(%8lx, %8lx, %8lx)\n", __FUNCTION__, cond, mutex, reltime));
 
@@ -128,14 +127,7 @@ int pthread_cond_timedwait_relative_np(pthread_cond_t *cond, pthread_mutex_t *mu
 			|| reltime->tv_nsec < 0 || reltime->tv_nsec >= 1000000000L)
 		return EINVAL;
 
-	// on the clock of the absolute deadlines
-	gettimeofday(&now, NULL);
-	deadline.__sec = (long long) now.tv_sec + reltime->tv_sec;
-	deadline.__nsec = now.tv_usec * 1000L + reltime->tv_nsec;
-	if (deadline.__nsec >= 1000000000L) {
-		deadline.__sec++;
-		deadline.__nsec -= 1000000000L;
-	}
+	deadline = DeadlineAfter(reltime);
 	return _pthread_cond_wait(cond, mutex, &deadline);
 }
 
