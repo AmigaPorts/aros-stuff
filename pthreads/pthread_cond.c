@@ -84,60 +84,24 @@ int pthread_cond_destroy(pthread_cond_t *cond) {
 	return 0;
 }
 
-// The mutex is given up whatever its count, and taken back with it.
-static int _pthread_cond_wait(pthread_cond_t *cond, pthread_mutex_t *mutex, const benaphore_time_t *deadline) {
-	benaphore_recursive_t *r;
-	int err = 0;
-
-	pthread_testcancel();
-
-	r = MutexLock(mutex);
-	if (__atomic_load_n(&r->__owner, __ATOMIC_RELAXED) != SysBase->ThisTask)
-		return EPERM;
-
-	mutex->incond++;
-	if (deadline)
-		err = benaphore_cond_timedwait_recursive(CondQueue(cond), r, deadline);
-	else
-		benaphore_cond_wait_recursive(CondQueue(cond), r);
-	mutex->incond--;
-
-	return err;
-}
-
-int pthread_cond_timedwait(pthread_cond_t *cond, pthread_mutex_t *mutex, const struct timespec *abstime) {
-	benaphore_time_t deadline;
-
-	D(bug("%s(%8lx, %8lx, %8lx)\n", __FUNCTION__, cond, mutex, abstime));
-
-	if (cond == NULL || mutex == NULL || abstime == NULL
-			|| abstime->tv_nsec < 0 || abstime->tv_nsec >= 1000000000L)
-		return EINVAL;
-
-	deadline = Deadline(abstime);
-	return _pthread_cond_wait(cond, mutex, &deadline);
-}
-
-int pthread_cond_timedwait_relative_np(pthread_cond_t *cond, pthread_mutex_t *mutex, const struct timespec *reltime) {
-	benaphore_time_t deadline;
-
-	D(bug("%s(%8lx, %8lx, %8lx)\n", __FUNCTION__, cond, mutex, reltime));
-
-	if (cond == NULL || mutex == NULL || reltime == NULL || reltime->tv_sec < 0
-			|| reltime->tv_nsec < 0 || reltime->tv_nsec >= 1000000000L)
-		return EINVAL;
-
-	deadline = DeadlineAfter(reltime);
-	return _pthread_cond_wait(cond, mutex, &deadline);
-}
+// pthread_cond_timedwait() and pthread_cond_timedwait_relative_np() are in
+// pthread_cond_timed.c
 
 int pthread_cond_wait(pthread_cond_t *cond, pthread_mutex_t *mutex) {
+	benaphore_recursive_t *r;
+
 	D(bug("%s(%8lx)\n", __FUNCTION__, cond));
 
 	if (cond == NULL || mutex == NULL)
 		return EINVAL;
 
-	return _pthread_cond_wait(cond, mutex, NULL);
+	if (!(r = CondMutex(mutex)))
+		return EPERM;
+	mutex->incond++;
+	benaphore_cond_wait_recursive(CondQueue(cond), r);
+	mutex->incond--;
+
+	return 0;
 }
 
 int pthread_cond_signal(pthread_cond_t *cond) {

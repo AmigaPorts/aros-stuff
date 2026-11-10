@@ -161,6 +161,35 @@ static inline benaphore_cond_t *CondQueue(pthread_cond_t *cond) {
 	return (benaphore_cond_t *) cond;
 }
 
+/* The timed waits have files of their own, so that a program that doesn't
+   use them doesn't link <benaphore.h>'s timed code.  These are shared. */
+
+// The calling task holds it already: a recursive mutex counts, and the
+// others refuse rather than deadlock.
+static inline int MutexRelock(pthread_mutex_t *mutex) {
+	if (mutex->kind != PTHREAD_MUTEX_RECURSIVE)
+		return EDEADLK;
+	MutexLock(mutex)->__count++;
+	return 0;
+}
+
+static inline void MutexOwn(benaphore_recursive_t *r, void *me) {
+	__atomic_store_n(&r->__owner, me, __ATOMIC_RELAXED);
+	r->__count = 1;
+}
+
+// The lock of the mutex a condition wait gives up, whatever its count, and
+// takes back with it; NULL if the calling task doesn't hold it.
+static inline benaphore_recursive_t *CondMutex(pthread_mutex_t *mutex) {
+	benaphore_recursive_t *r;
+
+	pthread_testcancel();
+	r = MutexLock(mutex);
+	if (__atomic_load_n(&r->__owner, __ATOMIC_RELAXED) != SysBase->ThisTask)
+		return NULL;
+	return r;
+}
+
 /* A timespec deadline, as <benaphore.h> takes it. */
 static inline benaphore_time_t Deadline(const struct timespec *ts) {
 	benaphore_time_t d;
