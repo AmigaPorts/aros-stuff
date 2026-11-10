@@ -119,6 +119,33 @@ check_one:
 		$(CXX) $(flags) -x c++ -fsyntax-only - >/dev/null 2>&1; then \
 		$(SUBMAKE) check_cxx_one kind=$(kind) flags="$(flags)"; \
 	else echo "SKIP $(kind) C++ tests: libstdc++ has no thread support"; fi
+	$(if $(SIM),$(Q)$(SUBMAKE) run_one kind=$(kind) flags="$(flags)")
+
+# With SIM=<volamos>, check also runs the programs that pass under it.  Not
+# joinsig, which runs out of signals there, tlskeys-1 and -2, which find no
+# task waiting on the TLS semaphore, nor t3w_warm, which doesn't finish.
+# The C++ ones are built with -m68881, so they need a 68020 with an FPU.
+RUN_TESTS = names condtime pmin c-tls c-tls-newlib nlstress tlskeys-0
+RUN_CXX_TESTS = t3race
+SIM_CPU = $(if $(filter -m680%,$(flags)),--cpu 68020)
+# Each runs with its multilib's tests directory as the current one: some
+# write files there, and volamos's own default, SYS:, is shared by all its
+# runs, which the multilibs' checks may make side by side.
+run_test = $(if $(Q),echo,:) "  RUN     $(1)"; \
+	d=$$(cd $(dir $(1)) && pwd); \
+	out=$$(timeout 120 $(SIM) $(2) --stack 64K -V "TESTS:$$d" --cwd TESTS: -- $$d/$(notdir $(1)) $(3) 2>&1) || \
+		{ rc=$$?; echo "$$out"; echo "FAIL $(1) [status $$rc]"; exit 1; }
+
+.PHONY: run_one
+run_one:
+	$(Q)for t in $(RUN_TESTS); do \
+		case $$t in pmin) args="3 tls" ;; *) args= ;; esac; \
+		$(call run_test,$(kind)/tests/$$t,$(SIM_CPU),$$args); \
+	done
+	$(Q)for t in $(RUN_CXX_TESTS); do \
+		[ -x $(kind)/tests/$$t ] || continue; \
+		$(call run_test,$(kind)/tests/$$t,--cpu 68020 --fpu); \
+	done
 
 # What a program links from libpthread, with the $(crt) runtime: the calls
 # libstdc++ makes without starting a thread must not bring pthread_create,
