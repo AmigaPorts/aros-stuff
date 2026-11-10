@@ -33,9 +33,11 @@ OBJ = \
 	pthread_barrier.o \
 	pthread_cancel.o \
 	pthread_cond.o \
+	pthread_cond_timed.o \
 	pthread_core.o \
 	pthread_key.o \
 	pthread_mutex.o \
+	pthread_mutex_timed.o \
 	pthread_once.o \
 	pthread_rwlock.o \
 	pthread_spin.o \

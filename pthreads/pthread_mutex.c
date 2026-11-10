@@ -106,20 +106,6 @@ int pthread_mutex_destroy(pthread_mutex_t *mutex) {
 	return 0;
 }
 
-// The calling task holds it already: a recursive mutex counts, and the
-// others refuse rather than deadlock.
-static int relock(pthread_mutex_t *mutex) {
-	if (mutex->kind != PTHREAD_MUTEX_RECURSIVE)
-		return EDEADLK;
-	MutexLock(mutex)->__count++;
-	return 0;
-}
-
-static void own(benaphore_recursive_t *r, void *me) {
-	__atomic_store_n(&r->__owner, me, __ATOMIC_RELAXED);
-	r->__count = 1;
-}
-
 int pthread_mutex_lock(pthread_mutex_t *mutex) {
 	benaphore_recursive_t *r;
 	void *me;
@@ -132,40 +118,14 @@ int pthread_mutex_lock(pthread_mutex_t *mutex) {
 	r = MutexLock(mutex);
 	me = SysBase->ThisTask;
 	if (__atomic_load_n(&r->__owner, __ATOMIC_RELAXED) == me)
-		return relock(mutex);
+		return MutexRelock(mutex);
 	benaphore_lock(&r->__b);
-	own(r, me);
+	MutexOwn(r, me);
 
 	return 0;
 }
 
-int pthread_mutex_timedlock(pthread_mutex_t *mutex, const struct timespec *abstime) {
-	benaphore_recursive_t *r;
-	benaphore_time_t deadline;
-	void *me;
-	int err;
-
-	D(bug("%s(%8lx, %7lx)\n", __FUNCTION__, mutex, abstime));
-
-	if (mutex == NULL)
-		return EINVAL;
-
-	if (abstime == NULL)
-		return pthread_mutex_lock(mutex);
-	else if (abstime->tv_nsec < 0 || abstime->tv_nsec >= 1000000000)
-		return EINVAL;
-
-	r = MutexLock(mutex);
-	me = SysBase->ThisTask;
-	if (__atomic_load_n(&r->__owner, __ATOMIC_RELAXED) == me)
-		return relock(mutex);
-	deadline = Deadline(abstime);
-	if ((err = benaphore_timedlock(&r->__b, &deadline)))
-		return err;
-	own(r, me);
-
-	return 0;
-}
+// pthread_mutex_timedlock() is in pthread_mutex_timed.c
 
 int pthread_mutex_trylock(pthread_mutex_t *mutex) {
 	benaphore_recursive_t *r;
@@ -179,10 +139,10 @@ int pthread_mutex_trylock(pthread_mutex_t *mutex) {
 	r = MutexLock(mutex);
 	me = SysBase->ThisTask;
 	if (__atomic_load_n(&r->__owner, __ATOMIC_RELAXED) == me)
-		return mutex->kind == PTHREAD_MUTEX_RECURSIVE ? relock(mutex) : EBUSY;
+		return mutex->kind == PTHREAD_MUTEX_RECURSIVE ? MutexRelock(mutex) : EBUSY;
 	if (!benaphore_trylock(&r->__b))
 		return EBUSY;
-	own(r, me);
+	MutexOwn(r, me);
 
 	return 0;
 }
