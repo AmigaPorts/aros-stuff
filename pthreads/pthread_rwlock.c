@@ -36,17 +36,12 @@ static int _obtain_sema_timed(struct SignalSemaphore *sema, const struct timeval
 	struct Task *task;
 
 #ifdef __AMIGA__
-	struct timeval now;
-	long long us;
+	ULONG secs, micro;
 
 	task = SysBase->ThisTask;
 
-	// the deadline is absolute, on gettimeofday()'s clock; the timer wants
-	// the time left
-	gettimeofday(&now, NULL);
-	us = ((long long) end->tv_sec - now.tv_sec) * 1000000
-		+ (long) end->tv_usec - (long) now.tv_usec;
-	if (us <= 0)
+	// the deadline is absolute; the timer wants the time left
+	if (!TimeLeft(end, &secs, &micro))
 		return ETIMEDOUT;
 #else
 	task = FindTask(NULL);
@@ -69,8 +64,8 @@ static int _obtain_sema_timed(struct SignalSemaphore *sema, const struct timeval
 	timerio.tr_node.io_Command = TR_ADDREQUEST;
 	timerio.tr_node.io_Message.mn_ReplyPort = &msgport;
 #ifdef __AMIGA__
-	timerio.tr_time.tv_secs = us / 1000000;
-	timerio.tr_time.tv_micro = us % 1000000;
+	timerio.tr_time.tv_secs = secs;
+	timerio.tr_time.tv_micro = micro;
 	timerio.tr_node.io_Device = DOSBase->dl_TimeReq->tr_node.io_Device;
 	timerio.tr_node.io_Unit = DOSBase->dl_TimeReq->tr_node.io_Unit;
 

@@ -170,6 +170,37 @@ static inline benaphore_time_t Deadline(const struct timespec *ts) {
 	return d;
 }
 
+/* The deadline rel after now, on the clock of the absolute deadlines.  Not
+   with timespecadd(): time_t is 32 bits, and a long wait would overflow it. */
+static inline benaphore_time_t DeadlineAfter(const struct timespec *rel) {
+	benaphore_time_t d;
+	struct timeval now;
+
+	gettimeofday(&now, NULL);
+	d.__sec = (long long) now.tv_sec + rel->tv_sec;
+	d.__nsec = now.tv_usec * 1000L + rel->tv_nsec;
+	if (d.__nsec >= 1000000000L) {
+		d.__sec++;
+		d.__nsec -= 1000000000L;
+	}
+	return d;
+}
+
+/* The time left until end, a deadline on gettimeofday()'s clock, in the
+   seconds and microseconds of a timer request; 0 if it has passed.
+   timersub() keeps the two apart, so no 64-bit arithmetic is needed. */
+static inline int TimeLeft(const struct timeval *end, ULONG *secs, ULONG *micro) {
+	struct timeval now, left;
+
+	gettimeofday(&now, NULL);
+	if (!timercmp(end, &now, >))
+		return 0;
+	timersub(end, &now, &left);
+	*secs = left.tv_sec;
+	*micro = left.tv_usec;
+	return 1;
+}
+
 static inline int SemaphoreIsInvalid(struct SignalSemaphore *sem) {
 	int r = (!sem || sem->ss_Link.ln_Type != NT_SIGNALSEM || sem->ss_WaitQueue.mlh_Tail != NULL);
 	DB2(bug("%s(%8lx)=%ld\n", __FUNCTION__, sem, r));
