@@ -121,16 +121,15 @@ check_one:
 	else echo "SKIP $(kind) C++ tests: libstdc++ has no thread support"; fi
 	$(if $(SIM),$(Q)$(SUBMAKE) run_one kind=$(kind) flags="$(flags)")
 
-# With SIM=<volamos>, check also runs the programs that pass under it: not
-# joinsig and t3w_warm until sidick/volamos#262, nor tlskeys-1 and -2 until
-# sidick/volamos#263.  The C++ ones are built with -m68881, so they need a
-# 68020 with an FPU.  c-tls checks that each thread has its own __thread
-# variables, which takes a gcc with a thread model: with the single one,
-# emutls keeps one copy for the whole program.
+# With SIM=<volamos>, check also runs the programs, which need volamos 0.18
+# or later.  The C++ ones are built with -m68881, so they need a 68020 with
+# an FPU.  c-tls checks that each thread has its own __thread variables,
+# which takes a gcc with a thread model: with the single one, emutls keeps
+# one copy for the whole program.
 THREAD_MODEL := $(shell $(CC) -v 2>&1 | sed -n 's/^Thread model: //p')
-RUN_TESTS = names condtime pmin nlstress tlskeys-0 \
+RUN_TESTS = joinsig names condtime pmin nlstress tlskeys-0 tlskeys-1 tlskeys-2 \
 	$(if $(filter-out single,$(THREAD_MODEL)),c-tls c-tls-newlib)
-RUN_CXX_TESTS = t3race
+RUN_CXX_TESTS = t3race t3w_warm
 SIM_CPU = $(if $(filter -m680%,$(flags)),--cpu 68020)
 # Each runs with its multilib's tests directory as the current one: some
 # write files there, and volamos's own default, SYS:, is shared by all its
