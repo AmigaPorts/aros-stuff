@@ -223,9 +223,20 @@ pthread:
 # build the lib in $(kind) with $(flags): one object per source, so that a
 # program links only the ones it calls
 SRCS = $(wildcard $(root)/pthread_*.c) $(root)/sched.c $(root)/semaphore.c
+# gcc 16.2 has <benaphore.h>, and libgcc the functions behind it; for an
+# older gcc, libpthread carries a copy of both in benaphore/
+HAVE_BENAPHORE := $(shell printf '\043include <benaphore.h>\n' | \
+	$(CC) -E -x c - >/dev/null 2>&1 && echo yes)
+ifeq (,$(HAVE_BENAPHORE))
+SRCS += $(wildcard $(root)/benaphore/*.c)
+endif
 OBJS = $(notdir $(SRCS:.c=.o))
 
-%.o: $(root)/%.c $(wildcard $(root)/*.h) $(root)/Makefile.m68k-amigaos
+%.o: $(root)/%.c $(wildcard $(root)/*.h) $(wildcard $(root)/benaphore/*.h) $(root)/Makefile.m68k-amigaos
+	$(quiet) "  CC      $(kind)/$@"
+	$(Q)$(CC) -c $(CFLAGS) $(flags) $< -o $@
+
+%.o: $(root)/benaphore/%.c $(wildcard $(root)/benaphore/*.h) $(root)/Makefile.m68k-amigaos
 	$(quiet) "  CC      $(kind)/$@"
 	$(Q)$(CC) -c $(CFLAGS) $(flags) $< -o $@
 
