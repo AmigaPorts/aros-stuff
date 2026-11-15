@@ -53,7 +53,13 @@
 
 #include "pthread.h"
 #include "debug.h"
+/* gcc 16.2 has <benaphore.h>, and its out-of-line half in libgcc; with an
+   older gcc, libpthread builds its own copy from benaphore/.  */
+#if __has_include(<benaphore.h>)
 #include <benaphore.h>
+#else
+#include "benaphore/benaphore.h"
+#endif
 
 #if defined(__AMIGA__)
 #include <exec/execbase.h>
