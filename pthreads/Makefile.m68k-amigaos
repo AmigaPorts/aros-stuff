@@ -144,7 +144,7 @@ run_test = $(if $(Q),echo,:) "  RUN     $(1)"; \
 .PHONY: run_one
 run_one:
 	$(Q)for t in $(RUN_TESTS); do \
-		case $$t in pmin) args="3 tls" ;; *) args= ;; esac; \
+		case $$t in pmin) args="3 tls exit" ;; *) args= ;; esac; \
 		$(call run_test,$(kind)/tests/$$t,$(SIM_CPU),$$args); \
 	done
 	$(Q)for t in $(RUN_CXX_TESTS); do \

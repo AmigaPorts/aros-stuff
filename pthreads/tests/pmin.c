@@ -1,5 +1,6 @@
 /* Minimal pthreads: start N threads (argv[1], default 1) that return their
-   argument, and join them.  "tls" makes each touch a thread-local first.
+   argument, and join them.  "tls" makes each touch a thread-local first,
+   "exit" makes the odd ones end with pthread_exit() instead.
    Distributed under the pthread library's zlib license.  */
 
 #include <pthread.h>
@@ -8,12 +9,14 @@
 #include <string.h>
 
 static __thread int tl;
-static int use_tls;
+static int use_tls, use_exit;
 
 static void *run(void *arg)
 {
 	if (use_tls)
 		tl = (int) (long) arg;
+	if (use_exit && (long) arg % 2)
+		pthread_exit(arg);
 	return arg;
 }
 
@@ -23,10 +26,13 @@ int main(int argc, char **argv)
 	int n = argc > 1 ? atoi(argv[1]) : 1;
 
 	if (n < 1 || n > 8) {
-		printf("usage: pmin [1-8] [tls]\n");
+		printf("usage: pmin [1-8] [tls] [exit]\n");
 		return 20;
 	}
-	use_tls = argc > 2 && !strcmp(argv[2], "tls");
+	for (int i = 2; i < argc; i++) {
+		use_tls |= !strcmp(argv[i], "tls");
+		use_exit |= !strcmp(argv[i], "exit");
+	}
 
 	int started = 0;
 	while (started < n

@@ -93,7 +93,6 @@ static void StarterBody(void) {
 static void StarterFunc(void) {
 #endif
 	ThreadInfo *inf;
-	void *ret;
 	pthread_t pid;
 	int i, j;
 	int foundkey = TRUE;
@@ -153,7 +152,7 @@ static void StarterFunc(void) {
 
 			StackSwap(&stack);
 
-			ret = start(arg);
+			inf->ret = start(arg);
 #else
 			struct StackSwapArgs swapargs;
 			struct StackSwapStruct stack;
@@ -171,11 +170,12 @@ static void StarterFunc(void) {
 			inf->ret = (void *)NewStackSwap(&stack, inf->start, &swapargs);
 #endif
 		} else {
-			ret = start(arg);
+			inf->ret = start(arg);
 		}
 		Forbid();
 	}
-	// we end up here with Forbid() called before longjmp()
+	// we end up here with Forbid() called before longjmp(), and pthread_exit() has set
+	// inf->ret
 	Permit();
 
 	D(bug("* %s(pid=%ld after long jump)\n", __FUNCTION__, pid));
@@ -200,10 +200,7 @@ static void StarterFunc(void) {
 	__gthread_amigaos_task_end(FindTask(NULL));
 #endif
 
-	// inf may be invalid due to realloc
 	ObtainSemaphore(&thread_sem);
-	inf = GetThreadInfo(pid);
-	inf->ret = ret;
 
 #ifdef USE_ASYNC_CANCEL
 	// remove the exception handler
