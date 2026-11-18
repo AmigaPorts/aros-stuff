@@ -54,7 +54,9 @@ pthread_t pthread_self(void) {
 
 	thread = GetThreadId(task);
 
-	if (thread == PTHREAD_THREADS_MAX)
+	// a task pthread_create didn't start (one from CreateNewProc, say) has no slot:
+	// it is the main thread, and shares its thread-specific values
+	if (thread >= numThreads)
 		return 0;
 
 	return thread;

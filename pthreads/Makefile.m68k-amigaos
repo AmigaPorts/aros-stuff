@@ -98,6 +98,9 @@ check_one:
 	$(quiet) "  LD      $(kind)/tests/pmin"
 	$(Q)$(CC) $(flags) -mcrt=nix20 -O2 -Wall -I$(root) \
 		$(root)/tests/pmin.c -L$(kind) -lpthread -o $(kind)/tests/pmin
+	$(quiet) "  LD      $(kind)/tests/foreign"
+	$(Q)$(CC) $(flags) -mcrt=nix20 -O2 -Wall -I$(root) \
+		$(root)/tests/foreign.c -L$(kind) -lpthread -o $(kind)/tests/foreign
 	$(quiet) "  LD      $(kind)/tests/c-tls"
 	$(Q)$(CC) $(flags) -mcrt=nix20 -O2 -Wall -I$(root) \
 		$(root)/tests/c-tls.c -L$(kind) -lpthread -o $(kind)/tests/c-tls
@@ -129,7 +132,7 @@ check_one:
 # which takes a gcc with a thread model: with the single one, emutls keeps
 # one copy for the whole program.
 THREAD_MODEL := $(shell $(CC) -v 2>&1 | sed -n 's/^Thread model: //p')
-RUN_TESTS = joinsig names condtime pmin nlstress tlskeys-0 tlskeys-1 tlskeys-2 \
+RUN_TESTS = joinsig names condtime pmin foreign nlstress tlskeys-0 tlskeys-1 tlskeys-2 \
 	$(if $(filter-out single,$(THREAD_MODEL)),c-tls c-tls-newlib)
 RUN_CXX_TESTS = t3race t3w_warm
 SIM_CPU = $(if $(filter -m680%,$(flags)),--cpu 68020)
