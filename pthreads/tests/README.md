@@ -65,6 +65,7 @@ on AmigaOS; each must return zero.
 | program | runs | checks |
 |---|---|---|
 | `pmin 3 tls exit` | three threads that end with their argument, each touching a thread-local first: the second returns it, the others pass it to `pthread_exit()` | the joins return what each thread ended with |
+| `foreign` | a process started with `CreateNewProc()`, not `pthread_create()` | it is the main thread to pthreads: `pthread_self()` is 0, and it shares the main thread's `pthread_getspecific()` values |
 | `c-tls`, `c-tls-newlib` | four threads at once, then 30 one after the other | `_Thread_local` with an initializer and `__thread` without one start at their initial values and stay per thread |
 | `nlstress` | four threads at different priorities in newlib's `malloc()`, `realloc()`, `free()` and stdio, with `%f` | every line written to the shared FILE is whole, each thread's are all there and in order, and no thread's blocks were overwritten |
 
