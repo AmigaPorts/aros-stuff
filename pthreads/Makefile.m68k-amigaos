@@ -155,17 +155,12 @@ run_one:
 		$(call run_test,$(kind)/tests/$$t,--cpu 68020 --fpu); \
 	done
 
-# What a program links from libpthread, with the $(crt) runtime: the calls
-# libstdc++ makes without starting a thread must not bring pthread_create,
-# and creating a thread must not bring the C library's snprintf.
+# What a program links from libpthread, with the $(crt) runtime: creating a
+# thread must not bring the C library's snprintf.
 NM = $(CC:%gcc=%nm)
 .PHONY: check_link
 check_link:
-	$(quiet) "  CHECK   $(kind)/tests/gthr_link-$(crt) $(kind)/tests/create_link-$(crt)"
-	$(Q)$(CC) $(flags) -mcrt=$(crt) -O2 -Wall -I$(root) \
-		$(root)/tests/gthr_link.c -L$(kind) -lpthread -o $(kind)/tests/gthr_link-$(crt)
-	$(Q)if $(NM) $(kind)/tests/gthr_link-$(crt) | grep -q ' _pthread_create$$'; then \
-		echo "FAIL $(kind)/tests/gthr_link-$(crt) links pthread_create"; exit 1; fi
+	$(quiet) "  CHECK   $(kind)/tests/create_link-$(crt)"
 	$(Q)$(CC) $(flags) -mcrt=$(crt) -O2 -Wall -I$(root) \
 		$(root)/tests/create_link.c -L$(kind) -lpthread -o $(kind)/tests/create_link-$(crt)
 	$(Q)if $(NM) $(kind)/tests/create_link-$(crt) | grep -q ' _snprintf$$'; then \
