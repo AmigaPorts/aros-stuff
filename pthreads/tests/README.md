@@ -18,10 +18,8 @@ m68k-amigaos-g++ -mcrt=nix20 -m68020 -m68881 -O2 -std=gnu++23 \
 Use a libnix crt: the default newlib crt does not provide `gettimeofday()`
 for libpthread. `make -f Makefile.m68k-amigaos check` builds the tests for each
 multilib; C++ builds are skipped when libstdc++ lacks thread support.
-It also links `gthr_link.c` and `create_link.c` with libnix and newlib and
-fails if a program that only makes libstdc++'s pthread calls links
-`pthread_create`, or one that creates a thread links `snprintf`: these
-checks need no Amiga.
+It also links `create_link.c` with libnix and newlib and fails if a program
+that creates a thread links `snprintf`: this check needs no Amiga.
 The C++ tests are GPL-3.0-or-later, while `joinsig.c` follows the pthreads
 zlib licence as stated in its source header.
 
